@@ -1,8 +1,8 @@
 const std = @import("std");
 
-const DEBUG_SCANNER = true;
+const DEBUG_SCANNER = false;
 
-const TokenType = enum {
+pub const TokenType = enum {
     // Single-character tokens.
     TOKEN_LEFT_PAREN,
     TOKEN_RIGHT_PAREN,
@@ -50,33 +50,35 @@ const TokenType = enum {
     TOKEN_EOF,
 };
 
-const Token = struct {
+pub const Token = struct {
     type: TokenType,
     lexeme: []const u8,
     line: u32,
 };
 
-const Scanner = struct {
-    start: [*:0]const u8 = undefined,
-    current: [*:0]const u8 = undefined,
+pub const Scanner = struct {
+    start: [*]const u8 = undefined,
+    current: [*]const u8 = undefined,
     line: u32 = 1,
 
-    fn init(self: *Scanner, source: [*:0]const u8) void {
-        self.start = source;
-        self.current = source;
-        self.line = 1;
+    pub fn init(source: [*]const u8) Scanner {
+        return Scanner{
+            .start = source,
+            .current = source,
+            .line = 1,
+        };
     }
 
-    fn scan(self: *Scanner) Token {
-        if (self.atEnd()) return self.createToken(TokenType.TOKEN_EOF);
-
+    pub fn scan(self: *Scanner) Token {
         self.skipWhitespace();
 
         self.start = self.current;
 
+        if (self.atEnd()) return self.createToken(TokenType.TOKEN_EOF);
+
         const ch = self.advance();
 
-        if (DEBUG_SCANNER) {
+        if (comptime DEBUG_SCANNER) {
             std.debug.print("SCAN_DEBUG> token start_at_char='{d}'\n", .{ch});
         }
 
@@ -104,7 +106,7 @@ const Scanner = struct {
     }
 
     fn createToken(self: *Scanner, tokenType: TokenType) Token {
-        if (DEBUG_SCANNER) {
+        if (comptime DEBUG_SCANNER) {
             std.debug.print("SCAN_DEBUG> token type='{d}' lexeme='{s}'\n", .{ @intFromEnum(tokenType), createSlice(self.start, self.current) });
         }
         return Token{
@@ -200,7 +202,7 @@ fn isDigit(ch: u8) bool {
     return ch >= '0' and ch <= '9';
 }
 
-fn createSlice(start: [*:0]const u8, end: [*:0]const u8) []const u8 {
+fn createSlice(start: [*]const u8, end: [*]const u8) []const u8 {
     const len = @intFromPtr(end) - @intFromPtr(start);
     return start[0..len];
 }
@@ -216,9 +218,7 @@ test "slice from pointers" {
 
 test "test single char tokens" {
     const source = "  { (\t)   \n} ";
-    var scanner = Scanner{};
-
-    scanner.init(source);
+    var scanner = Scanner.init(source);
 
     const expected = [4]TokenType{
         TokenType.TOKEN_LEFT_BRACE,
@@ -235,8 +235,7 @@ test "test single char tokens" {
 
 test "test all single character tokens" {
     const source = "(){},.-+;/*";
-    var scanner = Scanner{};
-    scanner.init(source);
+    var scanner = Scanner.init(source);
 
     const expected = [_]TokenType{
         TokenType.TOKEN_LEFT_PAREN,
@@ -260,8 +259,7 @@ test "test all single character tokens" {
 
 test "test two character tokens" {
     const source = "! != = == < <= > >=";
-    var scanner = Scanner{};
-    scanner.init(source);
+    var scanner = Scanner.init(source);
 
     const expected = [_]TokenType{
         TokenType.TOKEN_BANG,
@@ -306,8 +304,7 @@ test "test EOF token" {
 
 test "test line tracking" {
     const source = "{\n\n}";
-    var scanner = Scanner{};
-    scanner.init(source);
+    var scanner = Scanner.init(source);
 
     const token1 = scanner.scan();
     try std.testing.expectEqual(TokenType.TOKEN_LEFT_BRACE, token1.type);
@@ -341,8 +338,7 @@ test "test error token for illegal character" {
 // Tests for number literals
 test "test integer numbers" {
     const source = "123 0 999";
-    var scanner = Scanner{};
-    scanner.init(source);
+    var scanner = Scanner.init(source);
 
     const token1 = scanner.scan();
     try std.testing.expectEqual(TokenType.TOKEN_NUMBER, token1.type);
@@ -377,8 +373,7 @@ test "test decimal numbers" {
 
 test "test number followed by dot" {
     const source = "123.";
-    var scanner = Scanner{};
-    scanner.init(source);
+    var scanner = Scanner.init(source);
 
     // Should be number "123" followed by dot token
     const token1 = scanner.scan();
@@ -421,8 +416,7 @@ test "test multiline string" {
 
 test "test string with special characters" {
     const source = "\"Hello,\\nWorld!\\t\"";
-    var scanner = Scanner{};
-    scanner.init(source);
+    var scanner = Scanner.init(source);
 
     const token = scanner.scan();
     try std.testing.expectEqual(TokenType.TOKEN_STRING, token.type);
@@ -431,8 +425,7 @@ test "test string with special characters" {
 
 test "test unterminated string" {
     const source = "\"unterminated string";
-    var scanner = Scanner{};
-    scanner.init(source);
+    var scanner = Scanner.init(source);
 
     const token = scanner.scan();
     try std.testing.expectEqual(TokenType.TOKEN_ERROR, token.type);
@@ -442,8 +435,7 @@ test "test unterminated string" {
 // Tests for single line comments
 test "test single line comments" {
     const source = "// this is a comment\n{";
-    var scanner = Scanner{};
-    scanner.init(source);
+    var scanner = Scanner.init(source);
 
     // Comments should be ignored, so we should get the brace directly
     const token = scanner.scan();
@@ -465,8 +457,7 @@ test "test comment at end of file" {
 
 test "test comment with tokens before" {
     const source = "var x = 123; // assign value";
-    var scanner = Scanner{};
-    scanner.init(source);
+    var scanner = Scanner.init(source);
 
     // Skip the first two for now since identifiers aren't implemented
     _ = scanner.scan(); // skip first (var)
@@ -489,8 +480,7 @@ test "test comment with tokens before" {
 // Integration tests with numbers, strings, and comments
 test "test mixed tokens with numbers and strings" {
     const source = "print \"The answer is \" + 42.0;";
-    var scanner = Scanner{};
-    scanner.init(source);
+    var scanner = Scanner.init(source);
 
     // Skip first token (print - identifier not implemented yet)
     _ = scanner.scan();
@@ -512,8 +502,7 @@ test "test mixed tokens with numbers and strings" {
 
 test "test numbers with operators" {
     const source = "1 + 2.5 * 3 / 4 - 0.1";
-    var scanner = Scanner{};
-    scanner.init(source);
+    var scanner = Scanner.init(source);
 
     const expected_tokens = [_]struct { type: TokenType, lexeme: []const u8 }{
         .{ .type = TokenType.TOKEN_NUMBER, .lexeme = "1" },
