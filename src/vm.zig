@@ -37,6 +37,13 @@ pub const VM = struct {
         while (true) {
             if (comptime DEBUG_TRACE_EXECUTION) {
                 _ = self.chunk.disassembleInstruction(@intFromPtr(self.ip) - @intFromPtr(self.chunk.code.items.ptr));
+                if (self.stack.items.len > 0) {
+                    std.debug.print("          ", .{});
+                    for (self.stack.items) |item| {
+                        std.debug.print("[ {d} ]", .{item});
+                    }
+                    std.debug.print("\n", .{});
+                }
             }
 
             const instruction: OpCode = std.meta.intToEnum(OpCode, self.readByte()) catch OpCode.ILLEGAL;

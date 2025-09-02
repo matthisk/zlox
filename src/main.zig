@@ -22,8 +22,6 @@ pub fn main() !void {
         const file_size = try file.getEndPos();
         source = try allocator.alloc(u8, file_size);
         _ = try file.readAll(source);
-
-        std.debug.print("Read from file '{s}':\n", .{file_path});
     } else {
         const stdin = std.io.getStdIn().reader();
 
@@ -32,7 +30,6 @@ pub fn main() !void {
         var buffer: [1024]u8 = undefined;
         if (try stdin.readUntilDelimiterOrEof(buffer[0..], '\n')) |input| {
             source = try allocator.dupe(u8, input);
-            std.debug.print("Read from stdin:\n", .{});
         } else {
             std.debug.print("No input received\n", .{});
             return;
@@ -41,5 +38,7 @@ pub fn main() !void {
 
     defer allocator.free(source);
 
-    try Engine.execute(allocator, source);
+    Engine.execute(allocator, source) catch |err| {
+        std.debug.print("Error: {}\n", .{err});
+    };
 }

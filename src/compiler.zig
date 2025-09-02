@@ -242,8 +242,11 @@ test "compiler complex expression" {
     var chunk = Chunk.init(std.testing.allocator);
     defer chunk.deinit();
 
-    var scanner = Scanner.init("(-1 + 2) * 3 - -4");
+    const source = "(-1 + 2) * 3 - -4";
+    var scanner = Scanner.init(source);
     var compiler = Compiler.init(&scanner);
+
+    std.debug.print("{s}\n", .{source});
 
     try compiler.compile(&chunk);
 }
