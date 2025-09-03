@@ -1,8 +1,9 @@
 const std = @import("std");
 const chunk_mod = @import("chunk.zig");
+const value = @import("value.zig");
 const Chunk = chunk_mod.Chunk;
-const Value = chunk_mod.Value;
 const OpCode = chunk_mod.OpCode;
+const Value = value.Value;
 
 pub const InterpretResult = enum {
     OK,
@@ -11,6 +12,8 @@ pub const InterpretResult = enum {
 };
 
 const BinaryOperator = enum { PLUS, MULTIPLY, DIVIDE, SUBTRACT };
+
+const Errors = error{RuntimeError};
 
 const DEBUG_TRACE_EXECUTION = true;
 
@@ -40,7 +43,11 @@ pub const VM = struct {
                 if (self.stack.items.len > 0) {
                     std.debug.print("          ", .{});
                     for (self.stack.items) |item| {
-                        std.debug.print("[ {d} ]", .{item});
+                        switch (item) {
+                            .number => |n| std.debug.print("[ {d} ]", .{n}),
+                            .bool => |b| std.debug.print("[ {} ]", .{b}),
+                            .nil => std.debug.print("[ nil ]", .{}),
+                        }
                     }
                     std.debug.print("\n", .{});
                 }
@@ -56,20 +63,36 @@ pub const VM = struct {
                     try self.stack.append(constant);
                 },
                 OpCode.OP_NEGATE => {
-                    const a = self.stack.pop() orelse unreachable;
-                    try self.stack.append(-a);
+                    switch (self.stack.getLast()) {
+                        .number => {
+                            const a = self.stack.pop().?.number;
+                            try self.stack.append(value.numberValue(-a));
+                        },
+                        else => {
+                            self.runtimeError("Operand must be a number.");
+                            return InterpretResult.RUNTIME_ERROR;
+                        },
+                    }
                 },
                 OpCode.OP_ADD => {
-                    try self.binaryOp(BinaryOperator.PLUS);
+                    self.binaryOp(BinaryOperator.PLUS) catch {
+                        return InterpretResult.RUNTIME_ERROR;
+                    };
                 },
                 OpCode.OP_SUBTRACT => {
-                    try self.binaryOp(BinaryOperator.SUBTRACT);
+                    self.binaryOp(BinaryOperator.SUBTRACT) catch {
+                        return InterpretResult.RUNTIME_ERROR;
+                    };
                 },
                 OpCode.OP_MULTIPLY => {
-                    try self.binaryOp(BinaryOperator.MULTIPLY);
+                    self.binaryOp(BinaryOperator.MULTIPLY) catch {
+                        return InterpretResult.RUNTIME_ERROR;
+                    };
                 },
                 OpCode.OP_DIVIDE => {
-                    try self.binaryOp(BinaryOperator.DIVIDE);
+                    self.binaryOp(BinaryOperator.DIVIDE) catch {
+                        return InterpretResult.RUNTIME_ERROR;
+                    };
                 },
                 OpCode.ILLEGAL => {
                     return InterpretResult.RUNTIME_ERROR;
@@ -92,14 +115,37 @@ pub const VM = struct {
     }
 
     inline fn binaryOp(self: *VM, comptime op: BinaryOperator) !void {
-        const b = self.stack.pop() orelse unreachable;
-        const a = self.stack.pop() orelse unreachable;
+        if (!self.checkNumberOperands()) {
+            self.runtimeError("Operands must be numbers.");
+            return Errors.RuntimeError;
+        }
+
+        // Safe to expect both entries to be numbers.
+        const b = self.stack.pop().?.number;
+        const a = self.stack.pop().?.number;
+
         const result = switch (op) {
             .PLUS => a + b,
             .MULTIPLY => a * b,
             .SUBTRACT => a - b,
             .DIVIDE => a / b,
         };
-        try self.stack.append(result);
+        try self.stack.append(value.numberValue(result));
+    }
+
+    fn checkNumberOperands(self: *VM) bool {
+        return value.isNumber(self.peekStack(0)) and value.isNumber(self.peekStack(1));
+    }
+
+    fn peekStack(self: *VM, i: usize) Value {
+        return self.stack.items[self.stack.items.len - 1 - i];
+    }
+
+    fn runtimeError(self: *VM, msg: []const u8) void {
+        const instruction = @intFromPtr(self.ip) - @intFromPtr(self.chunk.code.items.ptr) - 1;
+        const line = self.chunk.lines.items[instruction];
+
+        std.debug.print("{s}\n", .{msg});
+        std.debug.print("[line {d}] in script\n", .{line});
     }
 };

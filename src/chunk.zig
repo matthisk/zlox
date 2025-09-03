@@ -1,6 +1,6 @@
 const std = @import("std");
-
-pub const Value = f64;
+const value_mod = @import("value.zig");
+const Value = value_mod.Value;
 
 pub const OpCode = enum(u8) {
     OP_RETURN,
@@ -69,8 +69,10 @@ pub const Chunk = struct {
             },
             OpCode.OP_CONSTANT => {
                 const loc: u8 = self.code.items[offset + 1];
-                const value: Value = self.data.items[loc];
-                std.debug.print("OP_CONSTANT {d}\n", .{value});
+                const v: Value = self.data.items[loc];
+                std.debug.print("OP_CONSTANT ", .{});
+                value_mod.print(v);
+                std.debug.print("\n", .{});
                 return offset + 2;
             },
             OpCode.OP_NEGATE => {

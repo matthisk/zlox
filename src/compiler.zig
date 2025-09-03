@@ -1,15 +1,17 @@
 const std = @import("std");
 const scanner_mod = @import("scanner.zig");
 const chunk_mod = @import("chunk.zig");
+const value_mod = @import("value.zig");
 
 const Scanner = scanner_mod.Scanner;
 const TokenType = scanner_mod.TokenType;
 const Token = scanner_mod.Token;
+const Value = value_mod.Value;
+const numberValue = value_mod.numberValue;
 
 const Chunk = chunk_mod.Chunk;
 const OpCode = chunk_mod.OpCode;
 const ChunkErrors = chunk_mod.ChunkErrors;
-const Value = chunk_mod.Value;
 
 const CompilerError = error{ParseError};
 
@@ -139,7 +141,7 @@ pub const Compiler = struct {
         // Panic in case we cannot parse float. The lexer should NEVER return unparseable lexemes.
         const value = std.fmt.parseFloat(f64, self.previous.lexeme) catch unreachable;
 
-        self.emitConstant(value) catch self.errorAtCurrent("Out of constant slots.");
+        self.emitConstant(numberValue(value)) catch self.errorAtCurrent("Out of constant slots.");
     }
 
     fn grouping(self: *Compiler) void {
