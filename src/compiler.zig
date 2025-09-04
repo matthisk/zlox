@@ -53,7 +53,7 @@ pub const Compiler = struct {
         compiler.rules.set(TokenType.TOKEN_SEMICOLON, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
         compiler.rules.set(TokenType.TOKEN_SLASH, ParseRule{ .prefix = null, .infix = binary, .precedence = Precedence.FACTOR });
         compiler.rules.set(TokenType.TOKEN_STAR, ParseRule{ .prefix = null, .infix = binary, .precedence = Precedence.FACTOR });
-        compiler.rules.set(TokenType.TOKEN_BANG, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
+        compiler.rules.set(TokenType.TOKEN_BANG, ParseRule{ .prefix = unary, .infix = null, .precedence = Precedence.NONE });
         compiler.rules.set(TokenType.TOKEN_BANG_EQUAL, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
         compiler.rules.set(TokenType.TOKEN_EQUAL, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
         compiler.rules.set(TokenType.TOKEN_EQUAL_EQUAL, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
@@ -67,17 +67,17 @@ pub const Compiler = struct {
         compiler.rules.set(TokenType.TOKEN_AND, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
         compiler.rules.set(TokenType.TOKEN_CLASS, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
         compiler.rules.set(TokenType.TOKEN_ELSE, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
-        compiler.rules.set(TokenType.TOKEN_FALSE, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
+        compiler.rules.set(TokenType.TOKEN_FALSE, ParseRule{ .prefix = booleanFalse, .infix = null, .precedence = Precedence.NONE });
         compiler.rules.set(TokenType.TOKEN_FOR, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
         compiler.rules.set(TokenType.TOKEN_FUN, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
         compiler.rules.set(TokenType.TOKEN_IF, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
-        compiler.rules.set(TokenType.TOKEN_NIL, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
+        compiler.rules.set(TokenType.TOKEN_NIL, ParseRule{ .prefix = nil, .infix = null, .precedence = Precedence.NONE });
         compiler.rules.set(TokenType.TOKEN_OR, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
         compiler.rules.set(TokenType.TOKEN_PRINT, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
         compiler.rules.set(TokenType.TOKEN_RETURN, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
         compiler.rules.set(TokenType.TOKEN_SUPER, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
         compiler.rules.set(TokenType.TOKEN_THIS, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
-        compiler.rules.set(TokenType.TOKEN_TRUE, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
+        compiler.rules.set(TokenType.TOKEN_TRUE, ParseRule{ .prefix = booleanTrue, .infix = null, .precedence = Precedence.NONE });
         compiler.rules.set(TokenType.TOKEN_VAR, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
         compiler.rules.set(TokenType.TOKEN_WHILE, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
         compiler.rules.set(TokenType.TOKEN_ERROR, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
@@ -144,6 +144,18 @@ pub const Compiler = struct {
         self.emitConstant(numberValue(value)) catch self.errorAtCurrent("Out of constant slots.");
     }
 
+    fn booleanFalse(self: *Compiler) void {
+        self.emitByte(@intFromEnum(OpCode.OP_FALSE)) catch self.errorAtCurrent("OOO");
+    }
+
+    fn booleanTrue(self: *Compiler) void {
+        self.emitByte(@intFromEnum(OpCode.OP_TRUE)) catch self.errorAtCurrent("OOO");
+    }
+
+    fn nil(self: *Compiler) void {
+        self.emitByte(@intFromEnum(OpCode.OP_NIL)) catch self.errorAtCurrent("OOO");
+    }
+
     fn grouping(self: *Compiler) void {
         self.expression();
         self.consume(TokenType.TOKEN_RIGHT_PAREN, "Expect ')' after expression.");
@@ -171,6 +183,7 @@ pub const Compiler = struct {
 
         switch (operator) {
             TokenType.TOKEN_MINUS => self.emitByte(@intFromEnum(OpCode.OP_NEGATE)) catch self.errorAtCurrent("OOO"),
+            TokenType.TOKEN_BANG => self.emitByte(@intFromEnum(OpCode.OP_NOT)) catch self.errorAtCurrent("OOO"),
             else => unreachable,
         }
     }

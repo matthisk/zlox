@@ -15,7 +15,7 @@ pub inline fn numberValue(n: f64) Value {
 }
 
 pub inline fn nilValue() Value {
-    return Value{ .nil = null };
+    return Value{ .nil = {} };
 }
 
 pub inline fn isNumber(v: Value) bool {

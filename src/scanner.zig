@@ -82,6 +82,9 @@ pub const Scanner = struct {
             std.debug.print("SCAN_DEBUG> token start_at_char='{d}'\n", .{ch});
         }
 
+        if (isAlpha(ch)) return self.identifier();
+        if (isDigit(ch)) return self.number();
+
         return switch (ch) {
             '{' => self.createToken(TokenType.TOKEN_LEFT_BRACE),
             '}' => self.createToken(TokenType.TOKEN_RIGHT_BRACE),
@@ -99,7 +102,6 @@ pub const Scanner = struct {
             '<' => if (self.match('=')) self.createToken(TokenType.TOKEN_LESS_EQUAL) else self.createToken(TokenType.TOKEN_LESS),
             '>' => if (self.match('=')) self.createToken(TokenType.TOKEN_GREATER_EQUAL) else self.createToken(TokenType.TOKEN_GREATER),
             '"' => self.string(),
-            '0'...'9' => self.number(),
             0 => self.createToken(TokenType.TOKEN_EOF),
             else => self.errorToken("Illegal character."),
         };
@@ -155,6 +157,38 @@ pub const Scanner = struct {
         return self.createToken(TokenType.TOKEN_STRING);
     }
 
+    fn identifier(self: *Scanner) Token {
+        while (isDigit(self.current[0]) or isAlpha(self.current[0])) {
+            _ = self.advance();
+        }
+
+        return self.createToken(self.identifierType());
+    }
+
+    fn identifierType(self: *Scanner) TokenType {
+        return switch (self.start[0]) {
+            'a' => return self.checkKeyword(1, 2, "nd", TokenType.TOKEN_AND),
+            'c' => return self.checkKeyword(1, 4, "lass", TokenType.TOKEN_CLASS),
+            'e' => return self.checkKeyword(1, 3, "lse", TokenType.TOKEN_ELSE),
+            'i' => return self.checkKeyword(1, 1, "f", TokenType.TOKEN_IF),
+            'n' => return self.checkKeyword(1, 2, "il", TokenType.TOKEN_NIL),
+            'o' => return self.checkKeyword(1, 1, "r", TokenType.TOKEN_OR),
+            'p' => return self.checkKeyword(1, 4, "rint", TokenType.TOKEN_PRINT),
+            'r' => return self.checkKeyword(1, 5, "eturn", TokenType.TOKEN_RETURN),
+            's' => return self.checkKeyword(1, 4, "uper", TokenType.TOKEN_SUPER),
+            'v' => return self.checkKeyword(1, 2, "ar", TokenType.TOKEN_VAR),
+            'w' => return self.checkKeyword(1, 4, "hile", TokenType.TOKEN_WHILE),
+            't' => return self.checkKeyword(1, 3, "rue", TokenType.TOKEN_TRUE),
+            'f' => return self.checkKeyword(1, 3, "alse", TokenType.TOKEN_FALSE),
+            else => TokenType.TOKEN_IDENTIFIER,
+        };
+    }
+
+    fn checkKeyword(self: *Scanner, start: usize, length: usize, rest: []const u8, t: TokenType) TokenType {
+        if (std.mem.eql(u8, self.start[start..(start + length)], rest)) return t;
+        return TokenType.TOKEN_IDENTIFIER;
+    }
+
     fn number(self: *Scanner) Token {
         while (isDigit(self.peek())) {
             _ = self.advance();
@@ -198,8 +232,12 @@ pub const Scanner = struct {
     }
 };
 
-fn isDigit(ch: u8) bool {
+inline fn isDigit(ch: u8) bool {
     return ch >= '0' and ch <= '9';
+}
+
+inline fn isAlpha(ch: u8) bool {
+    return (ch >= 'a' and ch <= 'z') or (ch >= 'A' and ch <= 'Z') or ch == '_';
 }
 
 fn createSlice(start: [*]const u8, end: [*]const u8) []const u8 {
@@ -323,6 +361,22 @@ test "test lexeme content" {
     const token = scanner.scan();
     try std.testing.expectEqual(TokenType.TOKEN_BANG_EQUAL, token.type);
     try std.testing.expectEqualStrings("!=", token.lexeme);
+}
+
+test "reserved identifiers" {
+    const source = "if else and or class while print nil super var";
+    var scanner = Scanner.init(source);
+
+    try std.testing.expectEqual(TokenType.TOKEN_IF, scanner.scan().type);
+    try std.testing.expectEqual(TokenType.TOKEN_ELSE, scanner.scan().type);
+    try std.testing.expectEqual(TokenType.TOKEN_AND, scanner.scan().type);
+    try std.testing.expectEqual(TokenType.TOKEN_OR, scanner.scan().type);
+    try std.testing.expectEqual(TokenType.TOKEN_CLASS, scanner.scan().type);
+    try std.testing.expectEqual(TokenType.TOKEN_WHILE, scanner.scan().type);
+    try std.testing.expectEqual(TokenType.TOKEN_PRINT, scanner.scan().type);
+    try std.testing.expectEqual(TokenType.TOKEN_NIL, scanner.scan().type);
+    try std.testing.expectEqual(TokenType.TOKEN_SUPER, scanner.scan().type);
+    try std.testing.expectEqual(TokenType.TOKEN_VAR, scanner.scan().type);
 }
 
 test "test error token for illegal character" {

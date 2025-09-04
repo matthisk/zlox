@@ -58,9 +58,29 @@ pub const VM = struct {
                 OpCode.OP_RETURN => {
                     return InterpretResult.OK;
                 },
+                OpCode.OP_TRUE => {
+                    try self.stack.append(value.boolValue(true));
+                },
+                OpCode.OP_FALSE => {
+                    try self.stack.append(value.boolValue(false));
+                },
+                OpCode.OP_NIL => {
+                    try self.stack.append(value.nilValue());
+                },
                 OpCode.OP_CONSTANT => {
                     const constant = self.readConstant();
                     try self.stack.append(constant);
+                },
+                OpCode.OP_NOT => {
+                    switch (self.stack.getLast()) {
+                        .bool => {
+                            try self.stack.append(value.boolValue(!self.stack.pop().?.bool));
+                        },
+                        else => {
+                            self.runtimeError("Operand must be a boolean.");
+                            return InterpretResult.RUNTIME_ERROR;
+                        },
+                    }
                 },
                 OpCode.OP_NEGATE => {
                     switch (self.stack.getLast()) {

@@ -4,8 +4,12 @@ const Value = value_mod.Value;
 
 pub const OpCode = enum(u8) {
     OP_RETURN,
+    OP_TRUE,
+    OP_FALSE,
+    OP_NIL,
     OP_CONSTANT,
     OP_NEGATE,
+    OP_NOT,
     OP_ADD,
     OP_SUBTRACT,
     OP_MULTIPLY,
@@ -65,6 +69,22 @@ pub const Chunk = struct {
         switch (op) {
             OpCode.OP_RETURN => {
                 std.debug.print("OP_RETURN\n", .{});
+                return offset + 1;
+            },
+            OpCode.OP_FALSE => {
+                std.debug.print("OP_FALSE\n", .{});
+                return offset + 1;
+            },
+            OpCode.OP_TRUE => {
+                std.debug.print("OP_TRUE\n", .{});
+                return offset + 1;
+            },
+            OpCode.OP_NIL => {
+                std.debug.print("OP_NIL\n", .{});
+                return offset + 1;
+            },
+            OpCode.OP_NOT => {
+                std.debug.print("OP_NOT\n", .{});
                 return offset + 1;
             },
             OpCode.OP_CONSTANT => {
