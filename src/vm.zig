@@ -72,15 +72,7 @@ pub const VM = struct {
                     try self.stack.append(constant);
                 },
                 OpCode.OP_NOT => {
-                    switch (self.stack.getLast()) {
-                        .bool => {
-                            try self.stack.append(value.boolValue(!self.stack.pop().?.bool));
-                        },
-                        else => {
-                            self.runtimeError("Operand must be a boolean.");
-                            return InterpretResult.RUNTIME_ERROR;
-                        },
-                    }
+                    try self.stack.append(value.boolValue(isFalsey(self.stack.pop().?)));
                 },
                 OpCode.OP_NEGATE => {
                     switch (self.stack.getLast()) {
@@ -169,3 +161,7 @@ pub const VM = struct {
         std.debug.print("[line {d}] in script\n", .{line});
     }
 };
+
+inline fn isFalsey(v: Value) bool {
+    return value.isNil(v) or (value.isBool(v) and !v.bool);
+}

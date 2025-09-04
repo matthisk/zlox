@@ -25,6 +25,20 @@ pub inline fn isNumber(v: Value) bool {
     };
 }
 
+pub inline fn isBool(v: Value) bool {
+    return switch (v) {
+        .bool => true,
+        else => false,
+    };
+}
+
+pub inline fn isNil(v: Value) bool {
+    return switch (v) {
+        .nil => true,
+        else => false,
+    };
+}
+
 pub fn print(v: Value) void {
     switch (v) {
         .number => |n| std.debug.print("{d}", .{n}),
