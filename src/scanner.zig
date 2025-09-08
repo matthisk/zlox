@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const DEBUG_SCANNER = false;
+const DEBUG_SCANNER = true;
 
 pub const TokenType = enum {
     // Single-character tokens.
@@ -78,10 +78,6 @@ pub const Scanner = struct {
 
         const ch = self.advance();
 
-        if (comptime DEBUG_SCANNER) {
-            std.debug.print("SCAN_DEBUG> token start_at_char='{d}'\n", .{ch});
-        }
-
         if (isAlpha(ch)) return self.identifier();
         if (isDigit(ch)) return self.number();
 
@@ -109,7 +105,7 @@ pub const Scanner = struct {
 
     fn createToken(self: *Scanner, tokenType: TokenType) Token {
         if (comptime DEBUG_SCANNER) {
-            std.debug.print("SCAN_DEBUG> token type='{d}' lexeme='{s}'\n", .{ @intFromEnum(tokenType), createSlice(self.start, self.current) });
+            std.debug.print("SCANNER  > Emit type='{s}' lexeme='{s}'\n", .{ @tagName(tokenType), createSlice(self.start, self.current) });
         }
         return Token{
             .type = tokenType,
@@ -179,7 +175,7 @@ pub const Scanner = struct {
             'v' => return self.checkKeyword(1, 2, "ar", TokenType.TOKEN_VAR),
             'w' => return self.checkKeyword(1, 4, "hile", TokenType.TOKEN_WHILE),
             't' => return self.checkKeyword(1, 3, "rue", TokenType.TOKEN_TRUE),
-            'f' => return self.checkKeyword(1, 3, "alse", TokenType.TOKEN_FALSE),
+            'f' => return self.checkKeyword(1, 4, "alse", TokenType.TOKEN_FALSE),
             else => TokenType.TOKEN_IDENTIFIER,
         };
     }

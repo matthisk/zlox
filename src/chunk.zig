@@ -14,6 +14,8 @@ pub const OpCode = enum(u8) {
     OP_SUBTRACT,
     OP_MULTIPLY,
     OP_DIVIDE,
+    OP_AND,
+    OP_OR,
     ILLEGAL,
 };
 
@@ -113,6 +115,14 @@ pub const Chunk = struct {
             },
             OpCode.OP_DIVIDE => {
                 std.debug.print("OP_DIVIDE\n", .{});
+                return offset + 1;
+            },
+            OpCode.OP_AND => {
+                std.debug.print("OP_AND\n", .{});
+                return offset + 1;
+            },
+            OpCode.OP_OR => {
+                std.debug.print("OP_OR\n", .{});
                 return offset + 1;
             },
             OpCode.ILLEGAL => {

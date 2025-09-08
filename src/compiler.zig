@@ -27,7 +27,7 @@ const ParseRule = struct {
 
 const ParseRules = std.EnumArray(TokenType, ParseRule);
 
-const DEBUG_PRINT_CODE = false;
+const DEBUG_PRINT_CODE = true;
 
 pub const Compiler = struct {
     scanner: *Scanner,
@@ -64,20 +64,20 @@ pub const Compiler = struct {
         compiler.rules.set(TokenType.TOKEN_IDENTIFIER, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
         compiler.rules.set(TokenType.TOKEN_STRING, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
         compiler.rules.set(TokenType.TOKEN_NUMBER, ParseRule{ .prefix = number, .infix = null, .precedence = Precedence.NONE });
-        compiler.rules.set(TokenType.TOKEN_AND, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
+        compiler.rules.set(TokenType.TOKEN_AND, ParseRule{ .prefix = null, .infix = binary, .precedence = Precedence.AND });
         compiler.rules.set(TokenType.TOKEN_CLASS, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
         compiler.rules.set(TokenType.TOKEN_ELSE, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
-        compiler.rules.set(TokenType.TOKEN_FALSE, ParseRule{ .prefix = booleanFalse, .infix = null, .precedence = Precedence.NONE });
+        compiler.rules.set(TokenType.TOKEN_FALSE, ParseRule{ .prefix = literal, .infix = null, .precedence = Precedence.NONE });
         compiler.rules.set(TokenType.TOKEN_FOR, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
         compiler.rules.set(TokenType.TOKEN_FUN, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
         compiler.rules.set(TokenType.TOKEN_IF, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
-        compiler.rules.set(TokenType.TOKEN_NIL, ParseRule{ .prefix = nil, .infix = null, .precedence = Precedence.NONE });
-        compiler.rules.set(TokenType.TOKEN_OR, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
+        compiler.rules.set(TokenType.TOKEN_NIL, ParseRule{ .prefix = literal, .infix = null, .precedence = Precedence.NONE });
+        compiler.rules.set(TokenType.TOKEN_OR, ParseRule{ .prefix = null, .infix = binary, .precedence = Precedence.OR });
         compiler.rules.set(TokenType.TOKEN_PRINT, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
         compiler.rules.set(TokenType.TOKEN_RETURN, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
         compiler.rules.set(TokenType.TOKEN_SUPER, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
         compiler.rules.set(TokenType.TOKEN_THIS, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
-        compiler.rules.set(TokenType.TOKEN_TRUE, ParseRule{ .prefix = booleanTrue, .infix = null, .precedence = Precedence.NONE });
+        compiler.rules.set(TokenType.TOKEN_TRUE, ParseRule{ .prefix = literal, .infix = null, .precedence = Precedence.NONE });
         compiler.rules.set(TokenType.TOKEN_VAR, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
         compiler.rules.set(TokenType.TOKEN_WHILE, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
         compiler.rules.set(TokenType.TOKEN_ERROR, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
@@ -98,7 +98,9 @@ pub const Compiler = struct {
         if (self.hadError) {
             return CompilerError.ParseError;
         } else if (comptime DEBUG_PRINT_CODE) {
+            std.debug.print("\n", .{});
             self.chunk.disassemble("code");
+            std.debug.print("\n", .{});
         }
     }
 
@@ -124,11 +126,18 @@ pub const Compiler = struct {
             return;
         }
 
+        if (comptime DEBUG_PRINT_CODE) {
+            std.debug.print("COMPILER > Prefix token='{s}' with precedence='{s}' until precendence='{s}'\n", .{ @tagName(self.previous.type), @tagName(precedence), @tagName(self.rules.get(self.current.type).precedence) });
+        }
+
         prefixRule.?(self);
 
         while (@intFromEnum(precedence) <= @intFromEnum(self.rules.get(self.current.type).precedence)) {
             self.advance();
             const infixRule = self.rules.get(self.previous.type).infix;
+            if (comptime DEBUG_PRINT_CODE) {
+                std.debug.print("COMPILER > Infix token='{s}'\n", .{@tagName(self.previous.type)});
+            }
             infixRule.?(self);
         }
     }
@@ -144,16 +153,13 @@ pub const Compiler = struct {
         self.emitConstant(numberValue(value)) catch self.errorAtCurrent("Out of constant slots.");
     }
 
-    fn booleanFalse(self: *Compiler) void {
-        self.emitByte(@intFromEnum(OpCode.OP_FALSE)) catch self.errorAtCurrent("OOO");
-    }
-
-    fn booleanTrue(self: *Compiler) void {
-        self.emitByte(@intFromEnum(OpCode.OP_TRUE)) catch self.errorAtCurrent("OOO");
-    }
-
-    fn nil(self: *Compiler) void {
-        self.emitByte(@intFromEnum(OpCode.OP_NIL)) catch self.errorAtCurrent("OOO");
+    fn literal(self: *Compiler) void {
+        switch (self.previous.type) {
+            TokenType.TOKEN_FALSE => self.emitByte(@intFromEnum(OpCode.OP_FALSE)) catch self.errorAtCurrent("OOO"),
+            TokenType.TOKEN_TRUE => self.emitByte(@intFromEnum(OpCode.OP_TRUE)) catch self.errorAtCurrent("OOO"),
+            TokenType.TOKEN_NIL => self.emitByte(@intFromEnum(OpCode.OP_NIL)) catch self.errorAtCurrent("OOO"),
+            else => {},
+        }
     }
 
     fn grouping(self: *Compiler) void {
@@ -172,6 +178,8 @@ pub const Compiler = struct {
             TokenType.TOKEN_MINUS => self.emitByte(@intFromEnum(OpCode.OP_SUBTRACT)) catch self.errorAtCurrent("OOO"),
             TokenType.TOKEN_STAR => self.emitByte(@intFromEnum(OpCode.OP_MULTIPLY)) catch self.errorAtCurrent("OOO"),
             TokenType.TOKEN_SLASH => self.emitByte(@intFromEnum(OpCode.OP_DIVIDE)) catch self.errorAtCurrent("OOO"),
+            TokenType.TOKEN_AND => self.emitByte(@intFromEnum(OpCode.OP_AND)) catch self.errorAtCurrent("OOO"),
+            TokenType.TOKEN_OR => self.emitByte(@intFromEnum(OpCode.OP_OR)) catch self.errorAtCurrent("OOO"),
             else => unreachable,
         }
     }
@@ -210,6 +218,10 @@ pub const Compiler = struct {
     }
 
     fn emitByte(self: *Compiler, b: u8) std.mem.Allocator.Error!void {
+        if (comptime DEBUG_PRINT_CODE) {
+            const op: OpCode = @enumFromInt(b);
+            std.debug.print("COMPILER > Emit op='{s}'\n", .{@tagName(op)});
+        }
         try self.chunk.writeChunk(b, self.previous.line);
     }
 
@@ -244,24 +256,24 @@ fn nextPrecedence(precedence: Precedence) Precedence {
 }
 
 test "compiler" {
-    var chunk = Chunk.init(std.testing.allocator);
-    defer chunk.deinit();
-
-    var scanner = Scanner.init("(1 + 2) * (3 + 4)");
-    var compiler = Compiler.init(&scanner);
-
-    try compiler.compile(&chunk);
+    try testCompile("(1 + 2) * (3 + 4)");
 }
 
 test "compiler complex expression" {
+    const source = "(-1 + 2) * 3 - -4";
+    try testCompile(source);
+}
+
+test "compiler boolean logic" {
+    try testCompile("true or false");
+}
+
+fn testCompile(source: [*]const u8) !void {
     var chunk = Chunk.init(std.testing.allocator);
     defer chunk.deinit();
 
-    const source = "(-1 + 2) * 3 - -4";
     var scanner = Scanner.init(source);
     var compiler = Compiler.init(&scanner);
-
-    std.debug.print("{s}\n", .{source});
 
     try compiler.compile(&chunk);
 }

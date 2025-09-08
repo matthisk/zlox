@@ -106,6 +106,16 @@ pub const VM = struct {
                         return InterpretResult.RUNTIME_ERROR;
                     };
                 },
+                OpCode.OP_AND => {
+                    const b = self.stack.pop().?;
+                    const a = self.stack.pop().?;
+                    try self.stack.append(value.boolValue(isTruthy(a) and isTruthy(b)));
+                },
+                OpCode.OP_OR => {
+                    const b = self.stack.pop().?;
+                    const a = self.stack.pop().?;
+                    try self.stack.append(value.boolValue(isTruthy(a) or isTruthy(b)));
+                },
                 OpCode.ILLEGAL => {
                     return InterpretResult.RUNTIME_ERROR;
                 },
@@ -162,6 +172,18 @@ pub const VM = struct {
     }
 };
 
+inline fn isTruthy(v: Value) bool {
+    return switch (v) {
+        .bool => v.bool,
+        .number => false,
+        .nil => false,
+    };
+}
+
 inline fn isFalsey(v: Value) bool {
-    return value.isNil(v) or (value.isBool(v) and !v.bool);
+    return switch (v) {
+        .bool => !v.bool,
+        .number => false,
+        .nil => true,
+    };
 }
