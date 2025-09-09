@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const DEBUG_SCANNER = true;
+const DEBUG_SCANNER = false;
 
 pub const TokenType = enum {
     // Single-character tokens.
@@ -319,8 +319,7 @@ test "test two character tokens" {
 
 test "test whitespace handling" {
     const source = "  \t\r\n  {  \n  }  ";
-    var scanner = Scanner{};
-    scanner.init(source);
+    var scanner = Scanner.init(source);
 
     // Should skip whitespace and only return the tokens
     const token1 = scanner.scan();
@@ -334,8 +333,7 @@ test "test whitespace handling" {
 
 test "test EOF token" {
     const source = "";
-    var scanner = Scanner{};
-    scanner.init(source);
+    var scanner = Scanner.init(source);
 
     const token = scanner.scan();
     try std.testing.expectEqual(TokenType.TOKEN_EOF, token.type);
@@ -356,8 +354,7 @@ test "test line tracking" {
 
 test "test lexeme content" {
     const source = "!=";
-    var scanner = Scanner{};
-    scanner.init(source);
+    var scanner = Scanner.init(source);
 
     const token = scanner.scan();
     try std.testing.expectEqual(TokenType.TOKEN_BANG_EQUAL, token.type);
@@ -382,8 +379,7 @@ test "reserved identifiers" {
 
 test "test error token for illegal character" {
     const source = "@";
-    var scanner = Scanner{};
-    scanner.init(source);
+    var scanner = Scanner.init(source);
 
     const token = scanner.scan();
     try std.testing.expectEqual(TokenType.TOKEN_ERROR, token.type);
@@ -410,8 +406,7 @@ test "test integer numbers" {
 
 test "test decimal numbers" {
     const source = "123.456 0.1 999.0";
-    var scanner = Scanner{};
-    scanner.init(source);
+    var scanner = Scanner.init(source);
 
     const token1 = scanner.scan();
     try std.testing.expectEqual(TokenType.TOKEN_NUMBER, token1.type);
@@ -442,8 +437,7 @@ test "test number followed by dot" {
 // Tests for string literals
 test "test string literals" {
     const source = "\"hello\" \"world\" \"\"";
-    var scanner = Scanner{};
-    scanner.init(source);
+    var scanner = Scanner.init(source);
 
     const token1 = scanner.scan();
     try std.testing.expectEqual(TokenType.TOKEN_STRING, token1.type);
@@ -460,8 +454,7 @@ test "test string literals" {
 
 test "test multiline string" {
     const source = "\"hello\nworld\"";
-    var scanner = Scanner{};
-    scanner.init(source);
+    var scanner = Scanner.init(source);
 
     const token = scanner.scan();
     try std.testing.expectEqual(TokenType.TOKEN_STRING, token.type);
@@ -500,8 +493,7 @@ test "test single line comments" {
 
 test "test comment at end of file" {
     const source = "{ // comment at end";
-    var scanner = Scanner{};
-    scanner.init(source);
+    var scanner = Scanner.init(source);
 
     const token1 = scanner.scan();
     try std.testing.expectEqual(TokenType.TOKEN_LEFT_BRACE, token1.type);

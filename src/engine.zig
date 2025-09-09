@@ -12,8 +12,8 @@ const VM = vm_mod.VM;
 pub fn execute(allocator: std.mem.Allocator, source: []const u8) !void {
     var chunk = Chunk.init(allocator);
     var scanner = Scanner.init(source.ptr);
-    var compiler = Compiler.init(allocator, &scanner);
     var vm = VM.init(allocator, &chunk);
+    var compiler = Compiler.init(allocator, &scanner, &vm);
     defer chunk.deinit();
     defer vm.deinit();
 

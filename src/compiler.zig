@@ -2,7 +2,9 @@ const std = @import("std");
 const scanner_mod = @import("scanner.zig");
 const chunk_mod = @import("chunk.zig");
 const value_mod = @import("value.zig");
+const vm_mod = @import("vm.zig");
 
+const VM = vm_mod.VM;
 const Scanner = scanner_mod.Scanner;
 const TokenType = scanner_mod.TokenType;
 const Token = scanner_mod.Token;
@@ -27,10 +29,11 @@ const ParseRule = struct {
 
 const ParseRules = std.EnumArray(TokenType, ParseRule);
 
-const DEBUG_PRINT_CODE = true;
+const DEBUG_PRINT_CODE = false;
 
 pub const Compiler = struct {
     scanner: *Scanner,
+    vm: *VM,
     allocator: std.mem.Allocator,
     previous: Token = undefined,
     current: Token = undefined,
@@ -38,8 +41,8 @@ pub const Compiler = struct {
     chunk: *Chunk = undefined,
     rules: ParseRules = undefined,
 
-    pub fn init(allocator: std.mem.Allocator, scanner: *Scanner) Compiler {
-        var compiler = Compiler{ .allocator = allocator, .scanner = scanner };
+    pub fn init(allocator: std.mem.Allocator, scanner: *Scanner, vm: *VM) Compiler {
+        var compiler = Compiler{ .allocator = allocator, .scanner = scanner, .vm = vm };
 
         compiler.rules = ParseRules.initUndefined();
 
@@ -164,10 +167,13 @@ pub const Compiler = struct {
     }
 
     fn string(self: *Compiler) void {
-        const obj = self.allocator.create(value_mod.ObjStr) catch unreachable;
-        obj.chars = self.allocator.dupe(u8, self.previous.lexeme[1 .. self.previous.lexeme.len - 1]) catch unreachable;
+        const chars = self.allocator.dupe(u8, self.previous.lexeme[1 .. self.previous.lexeme.len - 1]) catch unreachable;
+        const value = value_mod.strValue(self.allocator, chars) catch unreachable;
 
-        self.emitConstant(value_mod.objValue(value_mod.Obj{ .str = obj })) catch self.errorAtCurrent("OOO");
+        value.obj.next = self.vm.objects;
+        self.vm.objects = value.obj;
+
+        self.emitConstant(value) catch self.errorAtCurrent("OOO");
     }
 
     fn grouping(self: *Compiler) void {
@@ -290,8 +296,11 @@ fn testCompile(source: [*]const u8) !void {
     var chunk = Chunk.init(std.testing.allocator);
     defer chunk.deinit();
 
+    var vm = VM.init(std.testing.allocator, &chunk);
+    defer vm.deinit();
+
     var scanner = Scanner.init(source);
-    var compiler = Compiler.init(std.testing.allocator, &scanner);
+    var compiler = Compiler.init(std.testing.allocator, &scanner, &vm);
 
     try compiler.compile(&chunk);
 }

@@ -4,6 +4,7 @@ const value = @import("value.zig");
 const Chunk = chunk_mod.Chunk;
 const OpCode = chunk_mod.OpCode;
 const Value = value.Value;
+const Obj = value.Obj;
 
 pub const InterpretResult = enum {
     OK,
@@ -18,20 +19,30 @@ const Errors = error{RuntimeError};
 const DEBUG_TRACE_EXECUTION = true;
 
 pub const VM = struct {
+    allocator: std.mem.Allocator,
     chunk: *Chunk,
     stack: std.ArrayList(Value),
+    objects: ?*Obj,
     ip: [*]u8,
 
     pub fn init(allocator: std.mem.Allocator, chunk: *Chunk) VM {
         return VM{
+            .allocator = allocator,
             .chunk = chunk,
             .stack = std.ArrayList(Value).init(allocator),
+            .objects = null,
             .ip = chunk.code.items.ptr,
         };
     }
 
     pub fn deinit(self: *VM) void {
         self.stack.deinit();
+        var object = self.objects;
+        while (object != null) {
+            const next = object.?.next;
+            object.?.destroy(self.allocator);
+            object = next;
+        }
     }
 
     pub fn run(self: *VM) !InterpretResult {
@@ -47,7 +58,11 @@ pub const VM = struct {
                             .number => |n| std.debug.print("[ {d} ]", .{n}),
                             .bool => |b| std.debug.print("[ {} ]", .{b}),
                             .nil => std.debug.print("[ nil ]", .{}),
-                            .obj => std.debug.print("[ {x} ]", .{@intFromPtr(item.obj.str)}),
+                            .obj => {
+                                std.debug.print("[ ", .{});
+                                value.print(item);
+                                std.debug.print(" ]", .{});
+                            },
                         }
                     }
                     std.debug.print("\n", .{});
@@ -153,24 +168,35 @@ pub const VM = struct {
     }
 
     inline fn binaryOp(self: *VM, comptime op: BinaryOperator) !void {
-        if (!self.checkNumberOperands()) {
+        if (self.checkStringOperands()) {
+            try self.concatenate();
+        } else if (self.checkNumberOperands()) {
+            // Safe to expect both entries to be numbers.
+            const b = self.stack.pop().?.number;
+            const a = self.stack.pop().?.number;
+
+            const result = switch (op) {
+                .PLUS => value.numberValue(a + b),
+                .MULTIPLY => value.numberValue(a * b),
+                .SUBTRACT => value.numberValue(a - b),
+                .DIVIDE => value.numberValue(a / b),
+                .LESS => value.boolValue(a < b),
+                .GREATER => value.boolValue(a > b),
+            };
+            try self.stack.append(result);
+        } else {
             self.runtimeError("Operands must be numbers.");
             return Errors.RuntimeError;
         }
+    }
 
-        // Safe to expect both entries to be numbers.
-        const b = self.stack.pop().?.number;
-        const a = self.stack.pop().?.number;
+    inline fn concatenate(self: *VM) !void {
+        const b = self.stack.pop().?.obj.data.str.chars;
+        const a = self.stack.pop().?.obj.data.str.chars;
 
-        const result = switch (op) {
-            .PLUS => value.numberValue(a + b),
-            .MULTIPLY => value.numberValue(a * b),
-            .SUBTRACT => value.numberValue(a - b),
-            .DIVIDE => value.numberValue(a / b),
-            .LESS => value.boolValue(a < b),
-            .GREATER => value.boolValue(a > b),
-        };
-        try self.stack.append(result);
+        const chars = try std.mem.concat(self.allocator, u8, &[_][]const u8{ a, b });
+
+        try self.stack.append(try value.strValue(self.allocator, chars));
     }
 
     inline fn valuesEqual(_: *VM, a: Value, b: Value) bool {
@@ -183,13 +209,17 @@ pub const VM = struct {
             .bool => a.bool == b.bool,
             .nil => true,
             .obj => {
-                if (std.meta.activeTag(a.obj) != std.meta.activeTag(b.obj)) {
+                if (std.meta.activeTag(a.obj.data) != std.meta.activeTag(b.obj.data)) {
                     return false;
                 }
 
-                return std.mem.eql(u8, a.obj.str.chars, b.obj.str.chars);
+                return std.mem.eql(u8, a.obj.data.str.chars, b.obj.data.str.chars);
             },
         };
+    }
+
+    fn checkStringOperands(self: *VM) bool {
+        return value.isString(self.peekStack(0)) and value.isString(self.peekStack(1));
     }
 
     fn checkNumberOperands(self: *VM) bool {
