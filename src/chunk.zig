@@ -16,6 +16,9 @@ pub const OpCode = enum(u8) {
     OP_DIVIDE,
     OP_AND,
     OP_OR,
+    OP_EQUALS,
+    OP_LESS,
+    OP_GREATER,
     ILLEGAL,
 };
 
@@ -123,6 +126,18 @@ pub const Chunk = struct {
             },
             OpCode.OP_OR => {
                 std.debug.print("OP_OR\n", .{});
+                return offset + 1;
+            },
+            OpCode.OP_EQUALS => {
+                std.debug.print("OP_EQUALS\n", .{});
+                return offset + 1;
+            },
+            OpCode.OP_LESS => {
+                std.debug.print("OP_LESS\n", .{});
+                return offset + 1;
+            },
+            OpCode.OP_GREATER => {
+                std.debug.print("OP_GREATER\n", .{});
                 return offset + 1;
             },
             OpCode.ILLEGAL => {

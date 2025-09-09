@@ -9,8 +9,6 @@ pub fn main() !void {
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
 
-    var source: []u8 = undefined;
-
     if (args.len > 1) {
         const file_path = args[1];
         const file = std.fs.cwd().openFile(file_path, .{}) catch |err| {
@@ -20,25 +18,38 @@ pub fn main() !void {
         defer file.close();
 
         const file_size = try file.getEndPos();
-        source = try allocator.alloc(u8, file_size);
+        const source = try allocator.alloc(u8, file_size);
         _ = try file.readAll(source);
+
+        defer allocator.free(source);
+
+        Engine.execute(allocator, source) catch |err| {
+            std.debug.print("Error: {}\n", .{err});
+        };
     } else {
-        const stdin = std.io.getStdIn().reader();
+        var buffer = std.ArrayList(u8).init(allocator);
+        defer buffer.deinit();
 
-        std.debug.print("> ", .{});
+        while (true) {
+            const stdin = std.io.getStdIn().reader();
 
-        var buffer: [1024]u8 = undefined;
-        if (try stdin.readUntilDelimiterOrEof(buffer[0..], '\n')) |input| {
-            source = try allocator.dupe(u8, input);
-        } else {
-            std.debug.print("No input received\n", .{});
-            return;
+            std.debug.print("> ", .{});
+
+            buffer.clearRetainingCapacity();
+
+            stdin.streamUntilDelimiter(buffer.writer(), '\n', null) catch |err| switch (err) {
+                error.EndOfStream => {
+                    std.debug.print("\nGoodbye!\n", .{});
+                    return;
+                },
+                else => return err,
+            };
+
+            try buffer.append(0);
+
+            Engine.execute(allocator, buffer.items) catch |err| {
+                std.debug.print("Error: {}\n", .{err});
+            };
         }
     }
-
-    defer allocator.free(source);
-
-    Engine.execute(allocator, source) catch |err| {
-        std.debug.print("Error: {}\n", .{err});
-    };
 }

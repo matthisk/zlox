@@ -4,6 +4,15 @@ pub const Value = union(enum) {
     bool: bool,
     number: f64,
     nil: void,
+    obj: Obj,
+};
+
+pub const Obj = union(enum) {
+    str: *ObjStr,
+};
+
+pub const ObjStr = struct {
+    chars: []const u8,
 };
 
 pub inline fn boolValue(b: bool) Value {
@@ -16,6 +25,10 @@ pub inline fn numberValue(n: f64) Value {
 
 pub inline fn nilValue() Value {
     return Value{ .nil = {} };
+}
+
+pub inline fn objValue(obj: Obj) Value {
+    return Value{ .obj = obj };
 }
 
 pub inline fn isNumber(v: Value) bool {
@@ -44,5 +57,8 @@ pub fn print(v: Value) void {
         .number => |n| std.debug.print("{d}", .{n}),
         .bool => |b| std.debug.print("{}", .{b}),
         .nil => std.debug.print("<nil>", .{}),
+        .obj => switch (v.obj) {
+            .str => std.debug.print("str@0x{x}", .{@intFromPtr(v.obj.str.chars.ptr)}),
+        },
     }
 }

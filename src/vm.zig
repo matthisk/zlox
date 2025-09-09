@@ -11,7 +11,7 @@ pub const InterpretResult = enum {
     RUNTIME_ERROR,
 };
 
-const BinaryOperator = enum { PLUS, MULTIPLY, DIVIDE, SUBTRACT };
+const BinaryOperator = enum { PLUS, MULTIPLY, DIVIDE, SUBTRACT, LESS, GREATER };
 
 const Errors = error{RuntimeError};
 
@@ -47,6 +47,7 @@ pub const VM = struct {
                             .number => |n| std.debug.print("[ {d} ]", .{n}),
                             .bool => |b| std.debug.print("[ {} ]", .{b}),
                             .nil => std.debug.print("[ nil ]", .{}),
+                            .obj => std.debug.print("[ {x} ]", .{@intFromPtr(item.obj.str)}),
                         }
                     }
                     std.debug.print("\n", .{});
@@ -116,6 +117,21 @@ pub const VM = struct {
                     const a = self.stack.pop().?;
                     try self.stack.append(value.boolValue(isTruthy(a) or isTruthy(b)));
                 },
+                OpCode.OP_EQUALS => {
+                    const b = self.stack.pop().?;
+                    const a = self.stack.pop().?;
+                    try self.stack.append(value.boolValue(self.valuesEqual(a, b)));
+                },
+                OpCode.OP_LESS => {
+                    self.binaryOp(BinaryOperator.LESS) catch {
+                        return InterpretResult.RUNTIME_ERROR;
+                    };
+                },
+                OpCode.OP_GREATER => {
+                    self.binaryOp(BinaryOperator.GREATER) catch {
+                        return InterpretResult.RUNTIME_ERROR;
+                    };
+                },
                 OpCode.ILLEGAL => {
                     return InterpretResult.RUNTIME_ERROR;
                 },
@@ -147,12 +163,33 @@ pub const VM = struct {
         const a = self.stack.pop().?.number;
 
         const result = switch (op) {
-            .PLUS => a + b,
-            .MULTIPLY => a * b,
-            .SUBTRACT => a - b,
-            .DIVIDE => a / b,
+            .PLUS => value.numberValue(a + b),
+            .MULTIPLY => value.numberValue(a * b),
+            .SUBTRACT => value.numberValue(a - b),
+            .DIVIDE => value.numberValue(a / b),
+            .LESS => value.boolValue(a < b),
+            .GREATER => value.boolValue(a > b),
         };
-        try self.stack.append(value.numberValue(result));
+        try self.stack.append(result);
+    }
+
+    inline fn valuesEqual(_: *VM, a: Value, b: Value) bool {
+        if (std.meta.activeTag(a) != std.meta.activeTag(b)) {
+            return false;
+        }
+
+        return switch (a) {
+            .number => a.number == b.number,
+            .bool => a.bool == b.bool,
+            .nil => true,
+            .obj => {
+                if (std.meta.activeTag(a.obj) != std.meta.activeTag(b.obj)) {
+                    return false;
+                }
+
+                return std.mem.eql(u8, a.obj.str.chars, b.obj.str.chars);
+            },
+        };
     }
 
     fn checkNumberOperands(self: *VM) bool {
@@ -177,6 +214,7 @@ inline fn isTruthy(v: Value) bool {
         .bool => v.bool,
         .number => false,
         .nil => false,
+        .obj => false,
     };
 }
 
@@ -185,5 +223,6 @@ inline fn isFalsey(v: Value) bool {
         .bool => !v.bool,
         .number => false,
         .nil => true,
+        .obj => true,
     };
 }

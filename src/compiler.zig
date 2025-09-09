@@ -31,14 +31,15 @@ const DEBUG_PRINT_CODE = true;
 
 pub const Compiler = struct {
     scanner: *Scanner,
+    allocator: std.mem.Allocator,
     previous: Token = undefined,
     current: Token = undefined,
     hadError: bool = false,
     chunk: *Chunk = undefined,
     rules: ParseRules = undefined,
 
-    pub fn init(scanner: *Scanner) Compiler {
-        var compiler = Compiler{ .scanner = scanner };
+    pub fn init(allocator: std.mem.Allocator, scanner: *Scanner) Compiler {
+        var compiler = Compiler{ .allocator = allocator, .scanner = scanner };
 
         compiler.rules = ParseRules.initUndefined();
 
@@ -54,15 +55,15 @@ pub const Compiler = struct {
         compiler.rules.set(TokenType.TOKEN_SLASH, ParseRule{ .prefix = null, .infix = binary, .precedence = Precedence.FACTOR });
         compiler.rules.set(TokenType.TOKEN_STAR, ParseRule{ .prefix = null, .infix = binary, .precedence = Precedence.FACTOR });
         compiler.rules.set(TokenType.TOKEN_BANG, ParseRule{ .prefix = unary, .infix = null, .precedence = Precedence.NONE });
-        compiler.rules.set(TokenType.TOKEN_BANG_EQUAL, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
+        compiler.rules.set(TokenType.TOKEN_BANG_EQUAL, ParseRule{ .prefix = null, .infix = binary, .precedence = Precedence.EQUALITY });
         compiler.rules.set(TokenType.TOKEN_EQUAL, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
-        compiler.rules.set(TokenType.TOKEN_EQUAL_EQUAL, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
-        compiler.rules.set(TokenType.TOKEN_GREATER, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
-        compiler.rules.set(TokenType.TOKEN_GREATER_EQUAL, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
-        compiler.rules.set(TokenType.TOKEN_LESS, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
-        compiler.rules.set(TokenType.TOKEN_LESS_EQUAL, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
+        compiler.rules.set(TokenType.TOKEN_EQUAL_EQUAL, ParseRule{ .prefix = null, .infix = binary, .precedence = Precedence.EQUALITY });
+        compiler.rules.set(TokenType.TOKEN_GREATER, ParseRule{ .prefix = null, .infix = binary, .precedence = Precedence.COMPARISON });
+        compiler.rules.set(TokenType.TOKEN_GREATER_EQUAL, ParseRule{ .prefix = null, .infix = binary, .precedence = Precedence.COMPARISON });
+        compiler.rules.set(TokenType.TOKEN_LESS, ParseRule{ .prefix = null, .infix = binary, .precedence = Precedence.COMPARISON });
+        compiler.rules.set(TokenType.TOKEN_LESS_EQUAL, ParseRule{ .prefix = null, .infix = binary, .precedence = Precedence.COMPARISON });
         compiler.rules.set(TokenType.TOKEN_IDENTIFIER, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
-        compiler.rules.set(TokenType.TOKEN_STRING, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
+        compiler.rules.set(TokenType.TOKEN_STRING, ParseRule{ .prefix = string, .infix = null, .precedence = Precedence.NONE });
         compiler.rules.set(TokenType.TOKEN_NUMBER, ParseRule{ .prefix = number, .infix = null, .precedence = Precedence.NONE });
         compiler.rules.set(TokenType.TOKEN_AND, ParseRule{ .prefix = null, .infix = binary, .precedence = Precedence.AND });
         compiler.rules.set(TokenType.TOKEN_CLASS, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
@@ -112,7 +113,7 @@ pub const Compiler = struct {
 
             if (self.current.type != TokenType.TOKEN_ERROR) break;
 
-            self.errorAtCurrent("Error");
+            self.errorAtCurrent("Scanner error");
         }
     }
 
@@ -162,6 +163,13 @@ pub const Compiler = struct {
         }
     }
 
+    fn string(self: *Compiler) void {
+        const obj = self.allocator.create(value_mod.ObjStr) catch unreachable;
+        obj.chars = self.allocator.dupe(u8, self.previous.lexeme[1 .. self.previous.lexeme.len - 1]) catch unreachable;
+
+        self.emitConstant(value_mod.objValue(value_mod.Obj{ .str = obj })) catch self.errorAtCurrent("OOO");
+    }
+
     fn grouping(self: *Compiler) void {
         self.expression();
         self.consume(TokenType.TOKEN_RIGHT_PAREN, "Expect ')' after expression.");
@@ -180,6 +188,12 @@ pub const Compiler = struct {
             TokenType.TOKEN_SLASH => self.emitByte(@intFromEnum(OpCode.OP_DIVIDE)) catch self.errorAtCurrent("OOO"),
             TokenType.TOKEN_AND => self.emitByte(@intFromEnum(OpCode.OP_AND)) catch self.errorAtCurrent("OOO"),
             TokenType.TOKEN_OR => self.emitByte(@intFromEnum(OpCode.OP_OR)) catch self.errorAtCurrent("OOO"),
+            TokenType.TOKEN_EQUAL_EQUAL => self.emitByte(@intFromEnum(OpCode.OP_EQUALS)) catch self.errorAtCurrent("OOO"),
+            TokenType.TOKEN_BANG_EQUAL => self.emitBytes(@intFromEnum(OpCode.OP_EQUALS), @intFromEnum(OpCode.OP_NOT)) catch self.errorAtCurrent("OOO"),
+            TokenType.TOKEN_LESS => self.emitByte(@intFromEnum(OpCode.OP_LESS)) catch self.errorAtCurrent("OOO"),
+            TokenType.TOKEN_GREATER => self.emitByte(@intFromEnum(OpCode.OP_GREATER)) catch self.errorAtCurrent("OOO"),
+            TokenType.TOKEN_LESS_EQUAL => self.emitBytes(@intFromEnum(OpCode.OP_GREATER), @intFromEnum(OpCode.OP_NOT)) catch self.errorAtCurrent("OOO"),
+            TokenType.TOKEN_GREATER_EQUAL => self.emitBytes(@intFromEnum(OpCode.OP_LESS), @intFromEnum(OpCode.OP_NOT)) catch self.errorAtCurrent("OOO"),
             else => unreachable,
         }
     }
@@ -268,12 +282,16 @@ test "compiler boolean logic" {
     try testCompile("true or false");
 }
 
+test "compiler strings" {
+    try testCompile("\"hello world\"");
+}
+
 fn testCompile(source: [*]const u8) !void {
     var chunk = Chunk.init(std.testing.allocator);
     defer chunk.deinit();
 
     var scanner = Scanner.init(source);
-    var compiler = Compiler.init(&scanner);
+    var compiler = Compiler.init(std.testing.allocator, &scanner);
 
     try compiler.compile(&chunk);
 }

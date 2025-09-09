@@ -99,7 +99,12 @@ pub const Scanner = struct {
             '>' => if (self.match('=')) self.createToken(TokenType.TOKEN_GREATER_EQUAL) else self.createToken(TokenType.TOKEN_GREATER),
             '"' => self.string(),
             0 => self.createToken(TokenType.TOKEN_EOF),
-            else => self.errorToken("Illegal character."),
+            else => {
+                if (comptime DEBUG_SCANNER) {
+                    std.debug.print("SCANNER  > Illegal character='{d}'\n", .{ch});
+                }
+                return self.errorToken("Illegal character.");
+            },
         };
     }
 
