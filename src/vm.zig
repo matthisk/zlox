@@ -24,12 +24,14 @@ pub const VM = struct {
     stack: std.ArrayList(Value),
     objects: ?*Obj,
     ip: [*]u8,
+    strings: std.StringHashMap(*Obj),
 
     pub fn init(allocator: std.mem.Allocator, chunk: *Chunk) VM {
         return VM{
             .allocator = allocator,
             .chunk = chunk,
             .stack = std.ArrayList(Value).init(allocator),
+            .strings = std.StringHashMap(*Obj).init(allocator),
             .objects = null,
             .ip = chunk.code.items.ptr,
         };
@@ -37,6 +39,7 @@ pub const VM = struct {
 
     pub fn deinit(self: *VM) void {
         self.stack.deinit();
+        self.strings.deinit();
         var object = self.objects;
         while (object != null) {
             const next = object.?.next;
@@ -195,8 +198,9 @@ pub const VM = struct {
         const a = self.stack.pop().?.obj.data.str.chars;
 
         const chars = try std.mem.concat(self.allocator, u8, &[_][]const u8{ a, b });
+        const v = value.objValue(try value.takeString(self.allocator, self, chars));
 
-        try self.stack.append(try value.strValue(self.allocator, chars));
+        try self.stack.append(v);
     }
 
     inline fn valuesEqual(_: *VM, a: Value, b: Value) bool {

@@ -32,9 +32,9 @@ const ParseRules = std.EnumArray(TokenType, ParseRule);
 const DEBUG_PRINT_CODE = false;
 
 pub const Compiler = struct {
+    allocator: std.mem.Allocator,
     scanner: *Scanner,
     vm: *VM,
-    allocator: std.mem.Allocator,
     previous: Token = undefined,
     current: Token = undefined,
     hadError: bool = false,
@@ -167,12 +167,8 @@ pub const Compiler = struct {
     }
 
     fn string(self: *Compiler) void {
-        const chars = self.allocator.dupe(u8, self.previous.lexeme[1 .. self.previous.lexeme.len - 1]) catch unreachable;
-        const value = value_mod.strValue(self.allocator, chars) catch unreachable;
-
-        value.obj.next = self.vm.objects;
-        self.vm.objects = value.obj;
-
+        const input = self.previous.lexeme[1 .. self.previous.lexeme.len - 1];
+        const value = value_mod.objValue(value_mod.copyString(self.allocator, self.vm, input) catch unreachable);
         self.emitConstant(value) catch self.errorAtCurrent("OOO");
     }
 

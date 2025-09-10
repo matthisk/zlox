@@ -1,4 +1,5 @@
 const std = @import("std");
+const VM = @import("vm.zig").VM;
 
 pub const Value = union(enum) {
     bool: bool,
@@ -51,6 +52,36 @@ pub inline fn strValue(allocator: std.mem.Allocator, chars: []const u8) !Value {
     const o = try allocator.create(Obj);
     o.data = ObjData{ .str = ObjStr{ .chars = chars } };
     return objValue(o);
+}
+
+pub inline fn copyString(allocator: std.mem.Allocator, vm: *VM, chars: []const u8) !*Obj {
+    const interned = vm.strings.get(chars);
+    if (interned != null) {
+        return interned.?;
+    }
+    return try allocateString(allocator, vm, try allocator.dupe(u8, chars));
+}
+
+pub inline fn takeString(allocator: std.mem.Allocator, vm: *VM, chars: []const u8) !*Obj {
+    const interned = vm.strings.get(chars);
+    if (interned != null) {
+        // Since we are taking ownership of the string, we need to free the duplicate string.
+        allocator.free(chars);
+        return interned.?;
+    }
+    return try allocateString(allocator, vm, chars);
+}
+
+pub inline fn allocateString(allocator: std.mem.Allocator, vm: *VM, chars: []const u8) !*Obj {
+    const o = try allocator.create(Obj);
+    o.data = ObjData{ .str = ObjStr{ .chars = chars } };
+
+    // Memory management. Intern the string and then register the new object with the vm.
+    try vm.strings.put(chars, o);
+    o.next = vm.objects;
+    vm.objects = o;
+
+    return o;
 }
 
 pub inline fn isNumber(v: Value) bool {
