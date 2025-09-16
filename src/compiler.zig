@@ -94,8 +94,10 @@ pub const Compiler = struct {
         self.chunk = chunk;
 
         self.advance();
-        self.expression();
-        self.consume(TokenType.TOKEN_EOF, "Expect end of expression.");
+
+        while (!self.match(TokenType.TOKEN_EOF)) {
+            self.declaration();
+        }
 
         self.end();
 
@@ -106,6 +108,60 @@ pub const Compiler = struct {
             self.chunk.disassemble("code");
             std.debug.print("\n", .{});
         }
+    }
+
+    fn declaration(self: *Compiler) void {
+        if (self.match(TokenType.TOKEN_VAR)) {
+            self.varDecl();
+        } else {
+            self.statement();
+        }
+    }
+
+    fn statement(self: *Compiler) void {
+        if (self.match(TokenType.TOKEN_PRINT)) {
+            self.printStatement();
+        } else {
+            self.expressionStatement();
+        }
+    }
+
+    fn varDecl(self: *Compiler) void {
+        const global = self.parseVariable("Expect variable name") catch 0;
+
+        if (self.match(TokenType.TOKEN_EQUAL)) {
+            self.expression();
+        } else {
+            self.emitOp(OpCode.OP_NIL) catch self.errorAtCurrent("OOO");
+        }
+        self.consume(TokenType.TOKEN_SEMICOLON, "Expect ';' after statement");
+
+        self.defineVariable(global);
+    }
+
+    fn parseVariable(self: *Compiler, errorMessage: []const u8) !u8 {
+        self.consume(TokenType.TOKEN_IDENTIFIER, errorMessage);
+        return try self.identifierConstant();
+    }
+
+    fn identifierConstant(self: *Compiler) !u8 {
+        return try self.makeConstant(value_mod.objValue(try value_mod.copyString(self.allocator, self.vm, self.previous.lexeme)));
+    }
+
+    fn defineVariable(self: *Compiler, global: u8) void {
+        self.emitBytes(@intFromEnum(OpCode.OP_DEFINE_GLOBAL), global) catch self.errorAtCurrent("OOO");
+    }
+
+    fn printStatement(self: *Compiler) void {
+        self.expression();
+        self.emitOp(OpCode.OP_PRINT) catch self.errorAtCurrent("OOO");
+        self.consume(TokenType.TOKEN_SEMICOLON, "Expect ';' after value.");
+    }
+
+    fn expressionStatement(self: *Compiler) void {
+        self.expression();
+        self.consume(TokenType.TOKEN_SEMICOLON, "Expect ';' after expression.");
+        self.emitOp(OpCode.OP_POP) catch self.errorAtCurrent("OOO");
     }
 
     fn advance(self: *Compiler) void {
@@ -159,9 +215,9 @@ pub const Compiler = struct {
 
     fn literal(self: *Compiler) void {
         switch (self.previous.type) {
-            TokenType.TOKEN_FALSE => self.emitByte(@intFromEnum(OpCode.OP_FALSE)) catch self.errorAtCurrent("OOO"),
-            TokenType.TOKEN_TRUE => self.emitByte(@intFromEnum(OpCode.OP_TRUE)) catch self.errorAtCurrent("OOO"),
-            TokenType.TOKEN_NIL => self.emitByte(@intFromEnum(OpCode.OP_NIL)) catch self.errorAtCurrent("OOO"),
+            TokenType.TOKEN_FALSE => self.emitOp(OpCode.OP_FALSE) catch self.errorAtCurrent("OOO"),
+            TokenType.TOKEN_TRUE => self.emitOp(OpCode.OP_TRUE) catch self.errorAtCurrent("OOO"),
+            TokenType.TOKEN_NIL => self.emitOp(OpCode.OP_NIL) catch self.errorAtCurrent("OOO"),
             else => {},
         }
     }
@@ -184,16 +240,16 @@ pub const Compiler = struct {
         self.parsePrecedence(nextPrecedence(rule.precedence));
 
         switch (operatorType) {
-            TokenType.TOKEN_PLUS => self.emitByte(@intFromEnum(OpCode.OP_ADD)) catch self.errorAtCurrent("OOO"),
-            TokenType.TOKEN_MINUS => self.emitByte(@intFromEnum(OpCode.OP_SUBTRACT)) catch self.errorAtCurrent("OOO"),
-            TokenType.TOKEN_STAR => self.emitByte(@intFromEnum(OpCode.OP_MULTIPLY)) catch self.errorAtCurrent("OOO"),
-            TokenType.TOKEN_SLASH => self.emitByte(@intFromEnum(OpCode.OP_DIVIDE)) catch self.errorAtCurrent("OOO"),
-            TokenType.TOKEN_AND => self.emitByte(@intFromEnum(OpCode.OP_AND)) catch self.errorAtCurrent("OOO"),
-            TokenType.TOKEN_OR => self.emitByte(@intFromEnum(OpCode.OP_OR)) catch self.errorAtCurrent("OOO"),
-            TokenType.TOKEN_EQUAL_EQUAL => self.emitByte(@intFromEnum(OpCode.OP_EQUALS)) catch self.errorAtCurrent("OOO"),
+            TokenType.TOKEN_PLUS => self.emitOp(OpCode.OP_ADD) catch self.errorAtCurrent("OOO"),
+            TokenType.TOKEN_MINUS => self.emitOp(OpCode.OP_SUBTRACT) catch self.errorAtCurrent("OOO"),
+            TokenType.TOKEN_STAR => self.emitOp(OpCode.OP_MULTIPLY) catch self.errorAtCurrent("OOO"),
+            TokenType.TOKEN_SLASH => self.emitOp(OpCode.OP_DIVIDE) catch self.errorAtCurrent("OOO"),
+            TokenType.TOKEN_AND => self.emitOp(OpCode.OP_AND) catch self.errorAtCurrent("OOO"),
+            TokenType.TOKEN_OR => self.emitOp(OpCode.OP_OR) catch self.errorAtCurrent("OOO"),
+            TokenType.TOKEN_EQUAL_EQUAL => self.emitOp(OpCode.OP_EQUALS) catch self.errorAtCurrent("OOO"),
             TokenType.TOKEN_BANG_EQUAL => self.emitBytes(@intFromEnum(OpCode.OP_EQUALS), @intFromEnum(OpCode.OP_NOT)) catch self.errorAtCurrent("OOO"),
-            TokenType.TOKEN_LESS => self.emitByte(@intFromEnum(OpCode.OP_LESS)) catch self.errorAtCurrent("OOO"),
-            TokenType.TOKEN_GREATER => self.emitByte(@intFromEnum(OpCode.OP_GREATER)) catch self.errorAtCurrent("OOO"),
+            TokenType.TOKEN_LESS => self.emitOp(OpCode.OP_LESS) catch self.errorAtCurrent("OOO"),
+            TokenType.TOKEN_GREATER => self.emitOp(OpCode.OP_GREATER) catch self.errorAtCurrent("OOO"),
             TokenType.TOKEN_LESS_EQUAL => self.emitBytes(@intFromEnum(OpCode.OP_GREATER), @intFromEnum(OpCode.OP_NOT)) catch self.errorAtCurrent("OOO"),
             TokenType.TOKEN_GREATER_EQUAL => self.emitBytes(@intFromEnum(OpCode.OP_LESS), @intFromEnum(OpCode.OP_NOT)) catch self.errorAtCurrent("OOO"),
             else => unreachable,
@@ -206,22 +262,34 @@ pub const Compiler = struct {
         self.parsePrecedence(Precedence.UNARY);
 
         switch (operator) {
-            TokenType.TOKEN_MINUS => self.emitByte(@intFromEnum(OpCode.OP_NEGATE)) catch self.errorAtCurrent("OOO"),
-            TokenType.TOKEN_BANG => self.emitByte(@intFromEnum(OpCode.OP_NOT)) catch self.errorAtCurrent("OOO"),
+            TokenType.TOKEN_MINUS => self.emitOp(OpCode.OP_NEGATE) catch self.errorAtCurrent("OOO"),
+            TokenType.TOKEN_BANG => self.emitOp(OpCode.OP_NOT) catch self.errorAtCurrent("OOO"),
             else => unreachable,
         }
     }
 
+    fn match(self: *Compiler, t: TokenType) bool {
+        if (self.check(t)) {
+            self.advance();
+            return true;
+        }
+        return false;
+    }
+
     fn consume(self: *Compiler, t: TokenType, msg: []const u8) void {
-        if (self.current.type == t) {
+        if (self.check(t)) {
             self.advance();
         } else {
             self.errorAtCurrent(msg);
         }
     }
 
+    fn check(self: *Compiler, t: TokenType) bool {
+        return self.current.type == t;
+    }
+
     fn end(self: *Compiler) void {
-        self.emitByte(@intFromEnum(OpCode.OP_RETURN)) catch self.errorAtCurrent("OOO");
+        self.emitOp(OpCode.OP_RETURN) catch self.errorAtCurrent("OOO");
     }
 
     fn emitConstant(self: *Compiler, value: Value) !void {
@@ -231,6 +299,10 @@ pub const Compiler = struct {
     fn emitBytes(self: *Compiler, b1: u8, b2: u8) std.mem.Allocator.Error!void {
         try self.emitByte(b1);
         try self.emitByte(b2);
+    }
+
+    fn emitOp(self: *Compiler, op: OpCode) std.mem.Allocator.Error!void {
+        try self.emitByte(@intFromEnum(op));
     }
 
     fn emitByte(self: *Compiler, b: u8) std.mem.Allocator.Error!void {

@@ -25,6 +25,7 @@ pub const VM = struct {
     objects: ?*Obj,
     ip: [*]u8,
     strings: std.StringHashMap(*Obj),
+    globals: std.StringHashMap(Value),
 
     pub fn init(allocator: std.mem.Allocator, chunk: *Chunk) VM {
         return VM{
@@ -32,6 +33,7 @@ pub const VM = struct {
             .chunk = chunk,
             .stack = std.ArrayList(Value).init(allocator),
             .strings = std.StringHashMap(*Obj).init(allocator),
+            .globals = std.StringHashMap(Value).init(allocator),
             .objects = null,
             .ip = chunk.code.items.ptr,
         };
@@ -149,6 +151,17 @@ pub const VM = struct {
                     self.binaryOp(BinaryOperator.GREATER) catch {
                         return InterpretResult.RUNTIME_ERROR;
                     };
+                },
+                OpCode.OP_POP => {
+                    _ = self.stack.pop();
+                },
+                OpCode.OP_PRINT => {
+                    const v = self.stack.pop().?;
+                    value.print(v);
+                },
+                OpCode.OP_DEFINE_GLOBAL => {
+                    const identifier = self.readConstant();
+                    try self.globals.put(identifier.obj.data.str.chars, self.stack.pop().?);
                 },
                 OpCode.ILLEGAL => {
                     return InterpretResult.RUNTIME_ERROR;

@@ -19,6 +19,9 @@ pub const OpCode = enum(u8) {
     OP_EQUALS,
     OP_LESS,
     OP_GREATER,
+    OP_PRINT,
+    OP_POP,
+    OP_DEFINE_GLOBAL,
     ILLEGAL,
 };
 
@@ -138,6 +141,18 @@ pub const Chunk = struct {
             },
             OpCode.OP_GREATER => {
                 std.debug.print("OP_GREATER\n", .{});
+                return offset + 1;
+            },
+            OpCode.OP_DEFINE_GLOBAL => {
+                std.debug.print("OP_DEFINE_GLOBAL\n", .{});
+                return offset + 2;
+            },
+            OpCode.OP_PRINT => {
+                std.debug.print("OP_PRINT\n", .{});
+                return offset + 1;
+            },
+            OpCode.OP_POP => {
+                std.debug.print("OP_POP\n", .{});
                 return offset + 1;
             },
             OpCode.ILLEGAL => {
