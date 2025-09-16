@@ -17,7 +17,20 @@ pub fn execute(allocator: std.mem.Allocator, source: []const u8) !void {
     defer chunk.deinit();
     defer vm.deinit();
 
-    try compiler.compile(&chunk);
+    compiler.compile(&chunk) catch |err| switch (err) {
+        std.mem.Allocator.Error.OutOfMemory => {
+            std.debug.print("Not enough memory.", .{});
+            return;
+        },
+        chunk_mod.ChunkErrors.OutOfConstantDataSlots => {
+            std.debug.print("Ran out of constant data slots (currently limited to 255).", .{});
+            return;
+        },
+        else => {
+            std.debug.print("Compile error.", .{});
+        },
+    };
+
     const result = try vm.run();
 
     std.debug.print("RESULT {s}\n", .{@tagName(result)});
