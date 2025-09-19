@@ -42,6 +42,7 @@ pub const VM = struct {
     pub fn deinit(self: *VM) void {
         self.stack.deinit();
         self.strings.deinit();
+        self.globals.deinit();
         var object = self.objects;
         while (object != null) {
             const next = object.?.next;
@@ -102,7 +103,7 @@ pub const VM = struct {
                             try self.stack.append(value.numberValue(-a));
                         },
                         else => {
-                            self.runtimeError("Operand must be a number.");
+                            self.runtimeError("Operand must be a number.", .{});
                             return InterpretResult.RUNTIME_ERROR;
                         },
                     }
@@ -163,6 +164,17 @@ pub const VM = struct {
                     const identifier = self.readConstant();
                     try self.globals.put(identifier.obj.data.str.chars, self.stack.pop().?);
                 },
+                OpCode.OP_GET_GLOBAL => {
+                    const identfier = self.readConstant();
+                    const v = self.globals.get(identfier.obj.data.str.chars);
+
+                    if (v == null) {
+                        self.runtimeError("Undefined variable '{s}'", .{identfier.obj.data.str.chars});
+                        return InterpretResult.RUNTIME_ERROR;
+                    } else {
+                        try self.stack.append(v.?);
+                    }
+                },
                 OpCode.ILLEGAL => {
                     return InterpretResult.RUNTIME_ERROR;
                 },
@@ -201,7 +213,7 @@ pub const VM = struct {
             };
             try self.stack.append(result);
         } else {
-            self.runtimeError("Operands must be numbers.");
+            self.runtimeError("Operands must be numbers.", .{});
             return Errors.RuntimeError;
         }
     }
@@ -247,11 +259,12 @@ pub const VM = struct {
         return self.stack.items[self.stack.items.len - 1 - i];
     }
 
-    fn runtimeError(self: *VM, msg: []const u8) void {
+    fn runtimeError(self: *VM, comptime msg: []const u8, args: anytype) void {
         const instruction = @intFromPtr(self.ip) - @intFromPtr(self.chunk.code.items.ptr) - 1;
         const line = self.chunk.lines.items[instruction];
 
-        std.debug.print("{s}\n", .{msg});
+        std.debug.print(msg, args);
+        std.debug.print("\n", .{});
         std.debug.print("[line {d}] in script\n", .{line});
     }
 };

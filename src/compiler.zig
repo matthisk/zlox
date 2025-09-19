@@ -29,7 +29,7 @@ const ParseRule = struct {
 
 const ParseRules = std.EnumArray(TokenType, ParseRule);
 
-const DEBUG_PRINT_CODE = false;
+const DEBUG_PRINT_CODE = true;
 
 pub const Compiler = struct {
     allocator: std.mem.Allocator,
@@ -65,7 +65,7 @@ pub const Compiler = struct {
         compiler.rules.set(TokenType.TOKEN_GREATER_EQUAL, ParseRule{ .prefix = null, .infix = binary, .precedence = Precedence.COMPARISON });
         compiler.rules.set(TokenType.TOKEN_LESS, ParseRule{ .prefix = null, .infix = binary, .precedence = Precedence.COMPARISON });
         compiler.rules.set(TokenType.TOKEN_LESS_EQUAL, ParseRule{ .prefix = null, .infix = binary, .precedence = Precedence.COMPARISON });
-        compiler.rules.set(TokenType.TOKEN_IDENTIFIER, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
+        compiler.rules.set(TokenType.TOKEN_IDENTIFIER, ParseRule{ .prefix = variable, .infix = null, .precedence = Precedence.NONE });
         compiler.rules.set(TokenType.TOKEN_STRING, ParseRule{ .prefix = string, .infix = null, .precedence = Precedence.NONE });
         compiler.rules.set(TokenType.TOKEN_NUMBER, ParseRule{ .prefix = number, .infix = null, .precedence = Precedence.NONE });
         compiler.rules.set(TokenType.TOKEN_AND, ParseRule{ .prefix = null, .infix = binary, .precedence = Precedence.AND });
@@ -164,24 +164,16 @@ pub const Compiler = struct {
         try self.emitOp(OpCode.OP_POP);
     }
 
-    fn advance(self: *Compiler) void {
-        self.previous = self.current;
-
-        while (true) {
-            self.current = self.scanner.scan();
-
-            if (self.current.type != TokenType.TOKEN_ERROR) break;
-
-            self.errorAtCurrent("Scanner error");
-        }
-    }
-
     fn expression(self: *Compiler) !void {
         try self.parsePrecedence(Precedence.ASSIGNMENT);
     }
 
     fn parsePrecedence(self: *Compiler, precedence: Precedence) !void {
         self.advance();
+
+        if (comptime DEBUG_PRINT_CODE) {
+            std.debug.print("COMPILER > token='{s}'\n", .{@tagName(self.previous.type)});
+        }
 
         const prefixRule = self.rules.get(self.previous.type).prefix;
 
@@ -220,6 +212,11 @@ pub const Compiler = struct {
             TokenType.TOKEN_NIL => self.emitOp(OpCode.OP_NIL),
             else => {},
         };
+    }
+
+    fn variable(self: *Compiler) !void {
+        const global = try self.identifierConstant();
+        try self.emitBytes(@intFromEnum(OpCode.OP_GET_GLOBAL), global);
     }
 
     fn string(self: *Compiler) !void {
@@ -281,6 +278,18 @@ pub const Compiler = struct {
             self.advance();
         } else {
             self.errorAtCurrent(msg);
+        }
+    }
+
+    fn advance(self: *Compiler) void {
+        self.previous = self.current;
+
+        while (true) {
+            self.current = self.scanner.scan();
+
+            if (self.current.type != TokenType.TOKEN_ERROR) break;
+
+            self.errorAtCurrent("Scanner error");
         }
     }
 

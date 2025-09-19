@@ -22,6 +22,7 @@ pub const OpCode = enum(u8) {
     OP_PRINT,
     OP_POP,
     OP_DEFINE_GLOBAL,
+    OP_GET_GLOBAL,
     ILLEGAL,
 };
 
@@ -76,89 +77,83 @@ pub const Chunk = struct {
         const op: OpCode = std.meta.intToEnum(OpCode, self.code.items[offset]) catch OpCode.ILLEGAL;
         switch (op) {
             OpCode.OP_RETURN => {
-                std.debug.print("OP_RETURN\n", .{});
-                return offset + 1;
+                return self.simpleInstruction("OP_RETURN", offset);
             },
             OpCode.OP_FALSE => {
-                std.debug.print("OP_FALSE\n", .{});
-                return offset + 1;
+                return self.simpleInstruction("OP_FALSE", offset);
             },
             OpCode.OP_TRUE => {
-                std.debug.print("OP_TRUE\n", .{});
-                return offset + 1;
+                return self.simpleInstruction("OP_TRUE", offset);
             },
             OpCode.OP_NIL => {
-                std.debug.print("OP_NIL\n", .{});
-                return offset + 1;
+                return self.simpleInstruction("OP_NIL", offset);
             },
             OpCode.OP_NOT => {
-                std.debug.print("OP_NOT\n", .{});
-                return offset + 1;
+                return self.simpleInstruction("OP_NOT", offset);
             },
             OpCode.OP_CONSTANT => {
-                const loc: u8 = self.code.items[offset + 1];
-                const v: Value = self.data.items[loc];
-                std.debug.print("OP_CONSTANT ", .{});
-                value_mod.print(v);
-                std.debug.print("\n", .{});
-                return offset + 2;
+                return self.constantInstruction("OP_CONSTANT", offset);
             },
             OpCode.OP_NEGATE => {
-                std.debug.print("OP_NEGATE\n", .{});
-                return offset + 1;
+                return self.simpleInstruction("OP_NEGATE", offset);
             },
             OpCode.OP_ADD => {
-                std.debug.print("OP_ADD\n", .{});
-                return offset + 1;
+                return self.simpleInstruction("OP_ADD", offset);
             },
             OpCode.OP_MULTIPLY => {
-                std.debug.print("OP_MULTIPLY\n", .{});
-                return offset + 1;
+                return self.simpleInstruction("OP_MULTIPLY", offset);
             },
             OpCode.OP_SUBTRACT => {
-                std.debug.print("OP_SUBTRACT\n", .{});
-                return offset + 1;
+                return self.simpleInstruction("OP_SUBTRACT", offset);
             },
             OpCode.OP_DIVIDE => {
-                std.debug.print("OP_DIVIDE\n", .{});
-                return offset + 1;
+                return self.simpleInstruction("OP_DIVIDE", offset);
             },
             OpCode.OP_AND => {
-                std.debug.print("OP_AND\n", .{});
-                return offset + 1;
+                return self.simpleInstruction("OP_AND", offset);
             },
             OpCode.OP_OR => {
-                std.debug.print("OP_OR\n", .{});
-                return offset + 1;
+                return self.simpleInstruction("OP_OR", offset);
             },
             OpCode.OP_EQUALS => {
-                std.debug.print("OP_EQUALS\n", .{});
-                return offset + 1;
+                return self.simpleInstruction("OP_EQUALS", offset);
             },
             OpCode.OP_LESS => {
-                std.debug.print("OP_LESS\n", .{});
-                return offset + 1;
+                return self.simpleInstruction("OP_LESS", offset);
             },
             OpCode.OP_GREATER => {
-                std.debug.print("OP_GREATER\n", .{});
-                return offset + 1;
+                return self.simpleInstruction("OP_GREATER", offset);
             },
             OpCode.OP_DEFINE_GLOBAL => {
-                std.debug.print("OP_DEFINE_GLOBAL\n", .{});
-                return offset + 2;
+                return self.constantInstruction("OP_DEFINE_GLOBAL", offset);
+            },
+            OpCode.OP_GET_GLOBAL => {
+                return self.constantInstruction("OP_GET_GLOBAL", offset);
             },
             OpCode.OP_PRINT => {
-                std.debug.print("OP_PRINT\n", .{});
-                return offset + 1;
+                return self.simpleInstruction("OP_PRINT", offset);
             },
             OpCode.OP_POP => {
-                std.debug.print("OP_POP\n", .{});
-                return offset + 1;
+                return self.simpleInstruction("OP_POP", offset);
             },
             OpCode.ILLEGAL => {
-                std.debug.print("ILLEGAL\n", .{});
-                return offset + 1;
+                return self.simpleInstruction("", offset);
             },
         }
+    }
+
+    fn simpleInstruction(_: *Chunk, comptime name: []const u8, offset: usize) usize {
+        std.debug.print(name, .{});
+        std.debug.print("\n", .{});
+        return offset + 1;
+    }
+
+    fn constantInstruction(self: *Chunk, comptime name: []const u8, offset: usize) usize {
+        const loc: u8 = self.code.items[offset + 1];
+        const v: Value = self.data.items[loc];
+        std.debug.print(name, .{});
+        value_mod.print(v);
+        std.debug.print("\n", .{});
+        return offset + 2;
     }
 };
