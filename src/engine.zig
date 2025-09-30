@@ -28,6 +28,7 @@ pub fn execute(allocator: std.mem.Allocator, source: []const u8) !void {
         },
         else => {
             std.debug.print("Compile error.", .{});
+            return;
         },
     };
 

@@ -146,7 +146,13 @@ pub const Compiler = struct {
     }
 
     fn identifierConstant(self: *Compiler) !u8 {
-        return try self.makeConstant(value_mod.objValue(try value_mod.copyString(self.allocator, self.vm, self.previous.lexeme)));
+        const obj = try value_mod.copyString(self.allocator, self.vm, self.previous.lexeme);
+        const constant = self.chunk.findValue(obj.data.str.chars);
+        if (constant != null) {
+            return constant.?;
+        }
+
+        return try self.makeConstant(value_mod.objValue(obj));
     }
 
     fn defineVariable(self: *Compiler, global: u8) !void {

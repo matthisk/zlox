@@ -58,6 +58,18 @@ pub const Chunk = struct {
         return std.math.cast(u8, self.data.items.len - 1) orelse return ChunkErrors.OutOfConstantDataSlots;
     }
 
+    pub fn findValue(self: *Chunk, v: []const u8) ?u8 {
+        for (self.data.items, 0..) |value, i| {
+            const chars = value.obj.data.str.chars;
+            if (value_mod.isString(value) and chars.ptr == v.ptr and chars.len == v.len) {
+                // Impossible to fina a dataslot that doesn't fit a u8, as it cannot be stored.
+                return std.math.cast(u8, i) orelse unreachable;
+            }
+        }
+
+        return null;
+    }
+
     pub fn disassemble(self: *Chunk, name: []const u8) void {
         std.debug.print("== {s} ==\n", .{name});
 
@@ -155,7 +167,7 @@ pub const Chunk = struct {
     fn constantInstruction(self: *Chunk, comptime name: []const u8, offset: usize) usize {
         const loc: u8 = self.code.items[offset + 1];
         const v: Value = self.data.items[loc];
-        std.debug.print(name, .{});
+        std.debug.print("{s} [{d}] ", .{ name, loc });
         value_mod.print(v);
         std.debug.print("\n", .{});
         return offset + 2;
