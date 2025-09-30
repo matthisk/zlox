@@ -1,0 +1,5 @@
+var breakfast = "beignets";
+var beverage = "care au lait";
+breakfast = "beignets with " + beverage;
+
+print breakfast;

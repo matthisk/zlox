@@ -175,6 +175,16 @@ pub const VM = struct {
                         try self.stack.append(v.?);
                     }
                 },
+                OpCode.OP_SET_GLOBAL => {
+                    const identifier = self.readConstant();
+                    const name = identifier.obj.data.str.chars;
+                    if (self.globals.contains(name)) {
+                        try self.globals.put(name, self.peekStack(0));
+                    } else {
+                        self.runtimeError("Undefined variable '{s}'", .{name});
+                        return InterpretResult.RUNTIME_ERROR;
+                    }
+                },
                 OpCode.ILLEGAL => {
                     return InterpretResult.RUNTIME_ERROR;
                 },

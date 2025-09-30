@@ -19,11 +19,12 @@ const CompilerError = error{ParseError};
 
 const Precedence = enum { NONE, ASSIGNMENT, OR, AND, EQUALITY, COMPARISON, TERM, FACTOR, UNARY, CALL, PRIMARY };
 
-const ParseFn = *const fn (self: *Compiler) (ChunkErrors || std.mem.Allocator.Error)!void;
+const PrefixParseFn = *const fn (self: *Compiler, canAssign: bool) (ChunkErrors || std.mem.Allocator.Error)!void;
+const InfixParseFn = *const fn (self: *Compiler) (ChunkErrors || std.mem.Allocator.Error)!void;
 
 const ParseRule = struct {
-    prefix: ?ParseFn,
-    infix: ?ParseFn,
+    prefix: ?PrefixParseFn,
+    infix: ?InfixParseFn,
     precedence: Precedence,
 };
 
@@ -186,7 +187,9 @@ pub const Compiler = struct {
             std.debug.print("COMPILER > Prefix token='{s}' with precedence='{s}' until precendence='{s}'\n", .{ @tagName(self.previous.type), @tagName(precedence), @tagName(self.rules.get(self.current.type).precedence) });
         }
 
-        try prefixRule.?(self);
+        const canAssign = @intFromEnum(precedence) <= @intFromEnum(Precedence.ASSIGNMENT);
+
+        try prefixRule.?(self, canAssign);
 
         while (@intFromEnum(precedence) <= @intFromEnum(self.rules.get(self.current.type).precedence)) {
             self.advance();
@@ -196,16 +199,20 @@ pub const Compiler = struct {
             }
             try infixRule.?(self);
         }
+
+        if (canAssign and self.match(TokenType.TOKEN_EQUAL)) {
+            self.errorAtCurrent("Invalid assignment target.");
+        }
     }
 
-    fn number(self: *Compiler) !void {
+    fn number(self: *Compiler, _: bool) !void {
         // Panic in case we cannot parse float. The lexer should NEVER return unparseable lexemes.
         const value = std.fmt.parseFloat(f64, self.previous.lexeme) catch unreachable;
 
         try self.emitConstant(numberValue(value));
     }
 
-    fn literal(self: *Compiler) !void {
+    fn literal(self: *Compiler, _: bool) !void {
         try switch (self.previous.type) {
             TokenType.TOKEN_FALSE => self.emitOp(OpCode.OP_FALSE),
             TokenType.TOKEN_TRUE => self.emitOp(OpCode.OP_TRUE),
@@ -214,18 +221,27 @@ pub const Compiler = struct {
         };
     }
 
-    fn variable(self: *Compiler) !void {
-        const global = try self.identifierConstant();
-        try self.emitBytes(@intFromEnum(OpCode.OP_GET_GLOBAL), global);
+    fn variable(self: *Compiler, canAssign: bool) !void {
+        try self.namedVariable(canAssign);
     }
 
-    fn string(self: *Compiler) !void {
+    fn namedVariable(self: *Compiler, canAssign: bool) !void {
+        const global = try self.identifierConstant();
+        if (canAssign and self.match(TokenType.TOKEN_EQUAL)) {
+            try self.expression();
+            try self.emitBytes(@intFromEnum(OpCode.OP_SET_GLOBAL), global);
+        } else {
+            try self.emitBytes(@intFromEnum(OpCode.OP_GET_GLOBAL), global);
+        }
+    }
+
+    fn string(self: *Compiler, _: bool) !void {
         const input = self.previous.lexeme[1 .. self.previous.lexeme.len - 1];
         const value = value_mod.objValue(try value_mod.copyString(self.allocator, self.vm, input));
         try self.emitConstant(value);
     }
 
-    fn grouping(self: *Compiler) !void {
+    fn grouping(self: *Compiler, _: bool) !void {
         try self.expression();
         self.consume(TokenType.TOKEN_RIGHT_PAREN, "Expect ')' after expression.");
     }
@@ -253,7 +269,7 @@ pub const Compiler = struct {
         };
     }
 
-    fn unary(self: *Compiler) !void {
+    fn unary(self: *Compiler, _: bool) !void {
         const operator = self.previous.type;
 
         try self.parsePrecedence(Precedence.UNARY);

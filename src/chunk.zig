@@ -23,6 +23,7 @@ pub const OpCode = enum(u8) {
     OP_POP,
     OP_DEFINE_GLOBAL,
     OP_GET_GLOBAL,
+    OP_SET_GLOBAL,
     ILLEGAL,
 };
 
@@ -129,6 +130,9 @@ pub const Chunk = struct {
             },
             OpCode.OP_GET_GLOBAL => {
                 return self.constantInstruction("OP_GET_GLOBAL", offset);
+            },
+            OpCode.OP_SET_GLOBAL => {
+                return self.constantInstruction("OP_SET_GLOBAL", offset);
             },
             OpCode.OP_PRINT => {
                 return self.simpleInstruction("OP_PRINT", offset);

@@ -1,2 +1,2 @@
-var global = "xxx";
+var global = "xxx\n";
 print global;
