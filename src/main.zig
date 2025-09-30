@@ -1,5 +1,5 @@
 const std = @import("std");
-const Engine = @import("engine.zig");
+const Engine = @import("engine.zig").Engine;
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -8,6 +8,9 @@ pub fn main() !void {
 
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
+
+    var engine = Engine.init(allocator);
+    defer engine.deinit();
 
     if (args.len > 1) {
         const file_path = args[1];
@@ -23,7 +26,7 @@ pub fn main() !void {
 
         defer allocator.free(source);
 
-        Engine.execute(allocator, source) catch |err| {
+        engine.execute(source) catch |err| {
             std.debug.print("Error: {}\n", .{err});
         };
     } else {
@@ -47,7 +50,7 @@ pub fn main() !void {
 
             try buffer.append(0);
 
-            Engine.execute(allocator, buffer.items) catch |err| {
+            engine.execute(buffer.items) catch |err| {
                 std.debug.print("Error: {}\n", .{err});
             };
         }

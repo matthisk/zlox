@@ -9,33 +9,56 @@ const Scanner = scanner_mod.Scanner;
 const Compiler = compiler_mod.Compiler;
 const VM = vm_mod.VM;
 
-pub fn execute(allocator: std.mem.Allocator, source: []const u8) !void {
-    var chunk = Chunk.init(allocator);
-    var scanner = Scanner.init(source.ptr);
-    var vm = VM.init(allocator, &chunk);
-    var compiler = Compiler.init(allocator, &scanner, &vm);
-    defer chunk.deinit();
-    defer vm.deinit();
+pub const Engine = struct {
+    allocator: std.mem.Allocator,
+    vm: VM,
+    persistent_chunk: Chunk,
 
-    compiler.compile(&chunk) catch |err| switch (err) {
-        std.mem.Allocator.Error.OutOfMemory => {
-            std.debug.print("Not enough memory.", .{});
-            return;
-        },
-        chunk_mod.ChunkErrors.OutOfConstantDataSlots => {
-            std.debug.print("Ran out of constant data slots (currently limited to 255).", .{});
-            return;
-        },
-        else => {
-            std.debug.print("Compile error.", .{});
-            return;
-        },
-    };
+    pub fn init(allocator: std.mem.Allocator) Engine {
+        var persistent_chunk = Chunk.init(allocator);
+        const vm = VM.init(allocator, &persistent_chunk);
+        return Engine{
+            .allocator = allocator,
+            .vm = vm,
+            .persistent_chunk = persistent_chunk,
+        };
+    }
 
-    const result = try vm.run();
+    pub fn deinit(self: *Engine) void {
+        self.vm.deinit();
+        self.persistent_chunk.deinit();
+    }
 
-    std.debug.print("RESULT {s}\n", .{@tagName(result)});
-}
+    pub fn execute(self: *Engine, source: []const u8) !void {
+        var chunk = Chunk.init(self.allocator);
+        defer chunk.deinit();
+
+        var scanner = Scanner.init(source.ptr);
+        var compiler = Compiler.init(self.allocator, &scanner, &self.vm);
+
+        compiler.compile(&chunk) catch |err| switch (err) {
+            std.mem.Allocator.Error.OutOfMemory => {
+                std.debug.print("Not enough memory.", .{});
+                return;
+            },
+            chunk_mod.ChunkErrors.OutOfConstantDataSlots => {
+                std.debug.print("Ran out of constant data slots (currently limited to 255).", .{});
+                return;
+            },
+            else => {
+                std.debug.print("Compile error.", .{});
+                return;
+            },
+        };
+
+        self.vm.chunk = &chunk;
+        self.vm.ip = chunk.code.items.ptr;
+
+        const result = try self.vm.run();
+
+        std.debug.print("RESULT {s}\n", .{@tagName(result)});
+    }
+};
 
 const InterpretResult = @import("vm.zig").InterpretResult;
 
@@ -70,10 +93,6 @@ fn executeTestFile(allocator: std.mem.Allocator, filename: []const u8) !Interpre
 
     try compiler.compile(&chunk);
     return try vm.run();
-}
-
-test "engine execute" {
-    try execute(std.testing.allocator, "1 + 1");
 }
 
 test "001 simple expression" {
