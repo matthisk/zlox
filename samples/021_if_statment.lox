@@ -1,10 +1,10 @@
-if (true) {
+if (true and true and false) {
   print "hello world";
 } else {
-  print "goodby world";
+  print "goodbye world";
 }
 
-if (false) {
+if (false or false or true) {
   print "goodbye world";
 } else {
   print "hello world";

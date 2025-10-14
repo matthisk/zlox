@@ -79,7 +79,7 @@ pub const Compiler = struct {
         compiler.rules.set(TokenType.TOKEN_IDENTIFIER, ParseRule{ .prefix = variable, .infix = null, .precedence = Precedence.NONE });
         compiler.rules.set(TokenType.TOKEN_STRING, ParseRule{ .prefix = string, .infix = null, .precedence = Precedence.NONE });
         compiler.rules.set(TokenType.TOKEN_NUMBER, ParseRule{ .prefix = number, .infix = null, .precedence = Precedence.NONE });
-        compiler.rules.set(TokenType.TOKEN_AND, ParseRule{ .prefix = null, .infix = binary, .precedence = Precedence.AND });
+        compiler.rules.set(TokenType.TOKEN_AND, ParseRule{ .prefix = null, .infix = and_, .precedence = Precedence.AND });
         compiler.rules.set(TokenType.TOKEN_CLASS, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
         compiler.rules.set(TokenType.TOKEN_ELSE, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
         compiler.rules.set(TokenType.TOKEN_FALSE, ParseRule{ .prefix = literal, .infix = null, .precedence = Precedence.NONE });
@@ -87,7 +87,7 @@ pub const Compiler = struct {
         compiler.rules.set(TokenType.TOKEN_FUN, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
         compiler.rules.set(TokenType.TOKEN_IF, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
         compiler.rules.set(TokenType.TOKEN_NIL, ParseRule{ .prefix = literal, .infix = null, .precedence = Precedence.NONE });
-        compiler.rules.set(TokenType.TOKEN_OR, ParseRule{ .prefix = null, .infix = binary, .precedence = Precedence.OR });
+        compiler.rules.set(TokenType.TOKEN_OR, ParseRule{ .prefix = null, .infix = or_, .precedence = Precedence.OR });
         compiler.rules.set(TokenType.TOKEN_PRINT, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
         compiler.rules.set(TokenType.TOKEN_RETURN, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
         compiler.rules.set(TokenType.TOKEN_SUPER, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
@@ -393,6 +393,26 @@ pub const Compiler = struct {
             TokenType.TOKEN_GREATER_EQUAL => self.emitBytes(@intFromEnum(OpCode.OP_LESS), @intFromEnum(OpCode.OP_NOT)),
             else => unreachable,
         };
+    }
+
+    fn and_(self: *Compiler) !void {
+        const endJump = try self.emitJump(OpCode.OP_JUMP_IF_FALSE);
+
+        try self.emitOp(OpCode.OP_POP);
+        try self.parsePrecedence(Precedence.AND);
+
+        try self.patchJump(endJump);
+    }
+
+    fn or_(self: *Compiler) !void {
+        const elseJump = try self.emitJump(OpCode.OP_JUMP_IF_FALSE);
+        const endJump = try self.emitJump(OpCode.OP_JUMP);
+
+        try self.patchJump(elseJump);
+        try self.emitOp(OpCode.OP_POP);
+
+        try self.parsePrecedence(Precedence.OR);
+        try self.patchJump(endJump);
     }
 
     fn unary(self: *Compiler, _: bool) !void {
