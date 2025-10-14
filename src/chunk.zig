@@ -24,6 +24,10 @@ pub const OpCode = enum(u8) {
     OP_DEFINE_GLOBAL,
     OP_GET_GLOBAL,
     OP_SET_GLOBAL,
+    OP_GET_LOCAL,
+    OP_SET_LOCAL,
+    OP_JUMP_IF_FALSE,
+    OP_JUMP,
     ILLEGAL,
 };
 
@@ -60,10 +64,12 @@ pub const Chunk = struct {
 
     pub fn findValue(self: *Chunk, v: []const u8) ?u8 {
         for (self.data.items, 0..) |value, i| {
-            const chars = value.obj.data.str.chars;
-            if (value_mod.isString(value) and chars.ptr == v.ptr and chars.len == v.len) {
-                // Impossible to fina a dataslot that doesn't fit a u8, as it cannot be stored.
-                return std.math.cast(u8, i) orelse unreachable;
+            if (value_mod.isString(value)) {
+                const chars = value.obj.data.str.chars;
+                if (chars.ptr == v.ptr and chars.len == v.len) {
+                    // Impossible to fina a dataslot that doesn't fit a u8, as it cannot be stored.
+                    return std.math.cast(u8, i) orelse unreachable;
+                }
             }
         }
 
@@ -152,6 +158,18 @@ pub const Chunk = struct {
             OpCode.OP_POP => {
                 return self.simpleInstruction("OP_POP", offset);
             },
+            OpCode.OP_SET_LOCAL => {
+                return self.constantInstruction("OP_SET_LOCAL", offset);
+            },
+            OpCode.OP_GET_LOCAL => {
+                return self.constantInstruction("OP_GET_LOCAL", offset);
+            },
+            OpCode.OP_JUMP_IF_FALSE => {
+                return self.jumpInstruction("OP_JUMP_IF_FALSE", offset);
+            },
+            OpCode.OP_JUMP => {
+                return self.jumpInstruction("OP_JUMP", offset);
+            },
             OpCode.ILLEGAL => {
                 return self.simpleInstruction("", offset);
             },
@@ -171,5 +189,15 @@ pub const Chunk = struct {
         value_mod.print(v);
         std.debug.print("\n", .{});
         return offset + 2;
+    }
+
+    fn jumpInstruction(self: *Chunk, comptime name: []const u8, offset: usize) usize {
+        const high = self.code.items[offset + 1];
+        const low = self.code.items[offset + 2];
+        const jumpOffset = (@as(u16, high) << 8) | low;
+
+        std.debug.print("{s} [{d}]\n", .{ name, jumpOffset });
+
+        return offset + 3;
     }
 };

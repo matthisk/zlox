@@ -30,6 +30,13 @@ const ParseRule = struct {
 
 const ParseRules = std.EnumArray(TokenType, ParseRule);
 
+const Local = struct {
+    name: []const u8,
+    depth: usize,
+};
+
+const UINT8_COUNT = std.math.maxInt(u8) + 1;
+const UINT16_MAX = std.math.maxInt(u16);
 const DEBUG_PRINT_CODE = true;
 
 pub const Compiler = struct {
@@ -41,6 +48,9 @@ pub const Compiler = struct {
     hadError: bool = false,
     chunk: *Chunk = undefined,
     rules: ParseRules = undefined,
+    locals: [UINT8_COUNT]Local = undefined,
+    localCount: u8 = 0,
+    scopeDepth: usize = 0,
 
     pub fn init(allocator: std.mem.Allocator, scanner: *Scanner, vm: *VM) Compiler {
         var compiler = Compiler{ .allocator = allocator, .scanner = scanner, .vm = vm };
@@ -111,7 +121,7 @@ pub const Compiler = struct {
         }
     }
 
-    fn declaration(self: *Compiler) !void {
+    fn declaration(self: *Compiler) anyerror!void {
         if (self.match(TokenType.TOKEN_VAR)) {
             try self.varDecl();
         } else {
@@ -119,12 +129,58 @@ pub const Compiler = struct {
         }
     }
 
-    fn statement(self: *Compiler) !void {
+    fn statement(self: *Compiler) anyerror!void {
         if (self.match(TokenType.TOKEN_PRINT)) {
             try self.printStatement();
+        } else if (self.match(TokenType.TOKEN_LEFT_BRACE)) {
+            self.beginScope();
+            try self.block();
+            try self.endScope();
+        } else if (self.match(TokenType.TOKEN_IF)) {
+            try self.ifStatement();
         } else {
             try self.expressionStatement();
         }
+    }
+
+    fn beginScope(self: *Compiler) void {
+        self.scopeDepth += 1;
+    }
+
+    fn endScope(self: *Compiler) !void {
+        self.scopeDepth -= 1;
+
+        // Pop all variables from this scope, as they are no longer available after scope end.
+        while (self.localCount >= 1 and self.locals[self.localCount - 1].depth > self.scopeDepth) {
+            try self.emitByte(@intFromEnum(OpCode.OP_POP));
+            self.localCount -= 1;
+        }
+    }
+
+    fn block(self: *Compiler) !void {
+        while (!self.check(TokenType.TOKEN_RIGHT_BRACE)) {
+            try self.declaration();
+        }
+
+        self.consume(TokenType.TOKEN_RIGHT_BRACE, "Expect '}' after block.");
+    }
+
+    fn ifStatement(self: *Compiler) !void {
+        self.consume(TokenType.TOKEN_LEFT_PAREN, "Expect '(' after if.");
+        try self.expression();
+        self.consume(TokenType.TOKEN_RIGHT_PAREN, "Expect ')' after condition.");
+
+        const thenJump = try self.emitJump(OpCode.OP_JUMP_IF_FALSE);
+        try self.statement();
+
+        const elseJump = try self.emitJump(OpCode.OP_JUMP);
+        try self.patchJump(thenJump);
+
+        if (self.match(TokenType.TOKEN_ELSE)) {
+            try self.statement();
+        }
+
+        try self.patchJump(elseJump);
     }
 
     fn varDecl(self: *Compiler) !void {
@@ -142,7 +198,45 @@ pub const Compiler = struct {
 
     fn parseVariable(self: *Compiler, errorMessage: []const u8) !u8 {
         self.consume(TokenType.TOKEN_IDENTIFIER, errorMessage);
+        try self.declareVariable();
+        if (self.scopeDepth > 0) {
+            return 0;
+        }
         return try self.identifierConstant();
+    }
+
+    fn declareVariable(self: *Compiler) !void {
+        if (self.scopeDepth == 0) return;
+
+        const name = self.previous.lexeme;
+        self.addLocal(name);
+    }
+
+    fn addLocal(self: *Compiler, name: []const u8) void {
+        if (self.localCount == UINT8_COUNT) {
+            self.errorAtCurrent("Too many variables in function");
+            return;
+        }
+
+        if (self.localCount > 0) {
+            var i: isize = self.localCount - 1;
+            while (i >= 0) : (i -= 1) {
+                const local = self.locals[@intCast(i)];
+                if (local.depth != -1 and local.depth < self.scopeDepth) {
+                    break;
+                }
+
+                if (std.mem.eql(u8, local.name, name)) {
+                    self.errorAtCurrent("Already a variable with this name in this scope");
+                }
+            }
+        }
+
+        var local = &self.locals[self.localCount];
+        local.name = name;
+        local.depth = self.scopeDepth;
+
+        self.localCount += 1;
     }
 
     fn identifierConstant(self: *Compiler) !u8 {
@@ -156,6 +250,9 @@ pub const Compiler = struct {
     }
 
     fn defineVariable(self: *Compiler, global: u8) !void {
+        if (self.scopeDepth > 0) {
+            return;
+        }
         try self.emitBytes(@intFromEnum(OpCode.OP_DEFINE_GLOBAL), global);
     }
 
@@ -228,17 +325,37 @@ pub const Compiler = struct {
     }
 
     fn variable(self: *Compiler, canAssign: bool) !void {
-        try self.namedVariable(canAssign);
+        try self.namedVariable(canAssign, self.previous.lexeme);
     }
 
-    fn namedVariable(self: *Compiler, canAssign: bool) !void {
-        const global = try self.identifierConstant();
+    fn namedVariable(self: *Compiler, canAssign: bool, name: []const u8) !void {
+        var getOp: OpCode = OpCode.OP_GET_LOCAL;
+        var setOp: OpCode = OpCode.OP_SET_LOCAL;
+        var arg = self.resolveLocal(name);
+
+        if (arg == null) {
+            arg = try self.identifierConstant();
+            getOp = OpCode.OP_GET_GLOBAL;
+            setOp = OpCode.OP_SET_GLOBAL;
+        }
+
         if (canAssign and self.match(TokenType.TOKEN_EQUAL)) {
             try self.expression();
-            try self.emitBytes(@intFromEnum(OpCode.OP_SET_GLOBAL), global);
+            try self.emitBytes(@intFromEnum(setOp), arg.?);
         } else {
-            try self.emitBytes(@intFromEnum(OpCode.OP_GET_GLOBAL), global);
+            try self.emitBytes(@intFromEnum(getOp), arg.?);
         }
+    }
+
+    fn resolveLocal(self: *Compiler, name: []const u8) ?u8 {
+        var i: isize = self.localCount - 1;
+        while (i >= 0) : (i -= 1) {
+            if (std.mem.eql(u8, self.locals[@intCast(i)].name, name)) {
+                return @intCast(i);
+            }
+        }
+
+        return null;
     }
 
     fn string(self: *Compiler, _: bool) !void {
@@ -328,19 +445,40 @@ pub const Compiler = struct {
     }
 
     fn emitBytes(self: *Compiler, b1: u8, b2: u8) !void {
+        if (comptime DEBUG_PRINT_CODE) {
+            const op: OpCode = @enumFromInt(b1);
+            std.debug.print("COMPILER > Emit op='{s}' byte='{d}'\n", .{ @tagName(op), b2 });
+        }
         try self.emitByte(b1);
         try self.emitByte(b2);
     }
 
+    fn emitJump(self: *Compiler, op: OpCode) !usize {
+        try self.emitOp(op);
+        try self.emitByte(0xff);
+        try self.emitByte(0xff);
+        return self.chunk.code.items.len - 2;
+    }
+
+    fn patchJump(self: *Compiler, offset: usize) !void {
+        const jump = self.chunk.code.items.len - offset - 2;
+
+        if (jump > UINT16_MAX) {
+            self.errorAtCurrent("Too much code to jump over.");
+        }
+
+        self.chunk.code.items[offset] = @intCast((jump >> 8) & 0xFF);
+        self.chunk.code.items[offset + 1] = @intCast(jump & 0xFF);
+    }
+
     fn emitOp(self: *Compiler, op: OpCode) !void {
+        if (comptime DEBUG_PRINT_CODE) {
+            std.debug.print("COMPILER > Emit op='{s}'\n", .{@tagName(op)});
+        }
         try self.emitByte(@intFromEnum(op));
     }
 
     fn emitByte(self: *Compiler, b: u8) !void {
-        if (comptime DEBUG_PRINT_CODE) {
-            const op: OpCode = @enumFromInt(b);
-            std.debug.print("COMPILER > Emit op='{s}'\n", .{@tagName(op)});
-        }
         try self.chunk.writeChunk(b, self.previous.line);
     }
 

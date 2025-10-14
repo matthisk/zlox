@@ -174,3 +174,28 @@ test "016 arithmetic negation" {
     const result = try executeTestFile(std.testing.allocator, "016_arithmetic_negation.lox");
     try std.testing.expect(result == InterpretResult.OK);
 }
+
+test "018 illegal assignment target" {
+    const source = try loadTestFile(std.testing.allocator, "018_illegal_assignment_target.lox");
+    defer std.testing.allocator.free(source);
+
+    var chunk = Chunk.init(std.testing.allocator);
+    var scanner = Scanner.init(source.ptr);
+    var vm = VM.init(std.testing.allocator, &chunk);
+    var compiler = Compiler.init(std.testing.allocator, &scanner, &vm);
+    defer chunk.deinit();
+    defer vm.deinit();
+
+    // This should fail to compile
+    try std.testing.expectError(error.CompileError, compiler.compile(&chunk));
+}
+
+test "019 assignments" {
+    const result = try executeTestFile(std.testing.allocator, "019_assignments.lox");
+    try std.testing.expect(result == InterpretResult.OK);
+}
+
+test "020 local variables" {
+    const result = try executeTestFile(std.testing.allocator, "020_local_variables.lox");
+    try std.testing.expect(result == InterpretResult.OK);
+}

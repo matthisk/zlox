@@ -185,6 +185,23 @@ pub const VM = struct {
                         return InterpretResult.RUNTIME_ERROR;
                     }
                 },
+                OpCode.OP_GET_LOCAL => {
+                    const slot = self.readByte();
+                    try self.stack.append(self.stack.items[slot]);
+                },
+                OpCode.OP_SET_LOCAL => {
+                    const slot = self.readByte();
+                    self.stack.items[slot] = self.peekStack(0);
+                },
+                OpCode.OP_JUMP_IF_FALSE => {
+                    const offset = self.readShort();
+                    if (isFalsey(self.peekStack(0))) {
+                        self.ip += offset;
+                    }
+                },
+                OpCode.OP_JUMP => {
+                    self.ip += self.readShort();
+                },
                 OpCode.ILLEGAL => {
                     return InterpretResult.RUNTIME_ERROR;
                 },
@@ -198,6 +215,13 @@ pub const VM = struct {
         const b = self.ip[0];
         self.ip += 1;
         return b;
+    }
+
+    inline fn readShort(self: *VM) u16 {
+        const high = self.ip[0];
+        const low = self.ip[1];
+        self.ip += 2;
+        return (@as(u16, high) << 8) | low;
     }
 
     inline fn readConstant(self: *VM) Value {
