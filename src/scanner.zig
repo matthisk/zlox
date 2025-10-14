@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const DEBUG_SCANNER = false;
+const DEBUG_SCANNER = true;
 
 pub const TokenType = enum {
     // Single-character tokens.
@@ -179,8 +179,27 @@ pub const Scanner = struct {
             's' => return self.checkKeyword(1, 4, "uper", TokenType.TOKEN_SUPER),
             'v' => return self.checkKeyword(1, 2, "ar", TokenType.TOKEN_VAR),
             'w' => return self.checkKeyword(1, 4, "hile", TokenType.TOKEN_WHILE),
-            't' => return self.checkKeyword(1, 3, "rue", TokenType.TOKEN_TRUE),
-            'f' => return self.checkKeyword(1, 4, "alse", TokenType.TOKEN_FALSE),
+            't' => {
+                if (self.current - self.start > 1) {
+                    return switch (self.start[1]) {
+                        'r' => return self.checkKeyword(2, 2, "ue", TokenType.TOKEN_TRUE),
+                        'h' => return self.checkKeyword(2, 2, "is", TokenType.TOKEN_THIS),
+                        else => TokenType.TOKEN_IDENTIFIER,
+                    };
+                }
+                return TokenType.TOKEN_IDENTIFIER;
+            },
+            'f' => {
+                if (self.current - self.start > 1) {
+                    return switch (self.start[1]) {
+                        'a' => return self.checkKeyword(2, 3, "lse", TokenType.TOKEN_FALSE),
+                        'o' => return self.checkKeyword(2, 1, "r", TokenType.TOKEN_FOR),
+                        'u' => return self.checkKeyword(2, 1, "n", TokenType.TOKEN_FUN),
+                        else => TokenType.TOKEN_IDENTIFIER,
+                    };
+                }
+                return TokenType.TOKEN_IDENTIFIER;
+            },
             else => TokenType.TOKEN_IDENTIFIER,
         };
     }

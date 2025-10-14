@@ -37,7 +37,7 @@ const Local = struct {
 
 const UINT8_COUNT = std.math.maxInt(u8) + 1;
 const UINT16_MAX = std.math.maxInt(u16);
-const DEBUG_PRINT_CODE = false;
+const DEBUG_PRINT_CODE = true;
 
 pub const Compiler = struct {
     allocator: std.mem.Allocator,
@@ -140,6 +140,8 @@ pub const Compiler = struct {
             try self.ifStatement();
         } else if (self.match(TokenType.TOKEN_WHILE)) {
             try self.whileStatement();
+        } else if (self.match(TokenType.TOKEN_FOR)) {
+            try self.forStatement();
         } else {
             try self.expressionStatement();
         }
@@ -167,10 +169,56 @@ pub const Compiler = struct {
         self.consume(TokenType.TOKEN_RIGHT_BRACE, "Expect '}' after block.");
     }
 
+    fn forStatement(self: *Compiler) !void {
+        self.beginScope();
+
+        self.consume(TokenType.TOKEN_LEFT_PAREN, "Expect '(' after for.");
+        if (self.match(TokenType.TOKEN_SEMICOLON)) {
+            // no initializer
+        } else if (self.match(TokenType.TOKEN_VAR)) {
+            try self.varDecl();
+        } else {
+            try self.expressionStatement();
+        }
+
+        var loopStart = self.chunk.code.items.len;
+        var exitJump: ?usize = null;
+        if (!self.match(TokenType.TOKEN_SEMICOLON)) {
+            try self.expression();
+            self.consume(TokenType.TOKEN_SEMICOLON, "Expect ';'.");
+
+            exitJump = try self.emitJump(OpCode.OP_JUMP_IF_FALSE);
+            try self.emitOp(OpCode.OP_POP);
+        }
+
+        if (!self.match(TokenType.TOKEN_RIGHT_PAREN)) {
+            const bodyJump = try self.emitJump(OpCode.OP_JUMP);
+            const incrementStart = self.chunk.code.items.len;
+
+            try self.expression();
+            try self.emitOp(OpCode.OP_POP);
+            self.consume(TokenType.TOKEN_RIGHT_PAREN, "Expect ')' after for clauses.");
+
+            try self.emitLoop(loopStart);
+            loopStart = incrementStart;
+            try self.patchJump(bodyJump);
+        }
+
+        try self.statement();
+        try self.emitLoop(loopStart);
+
+        if (exitJump != null) {
+            try self.patchJump(exitJump.?);
+            try self.emitOp(OpCode.OP_POP);
+        }
+
+        try self.endScope();
+    }
+
     fn whileStatement(self: *Compiler) !void {
         const loopStart = self.chunk.code.items.len;
 
-        self.consume(TokenType.TOKEN_LEFT_PAREN, "Expect '(' after if.");
+        self.consume(TokenType.TOKEN_LEFT_PAREN, "Expect '(' after while.");
         try self.expression();
         self.consume(TokenType.TOKEN_RIGHT_PAREN, "Expect ')' after condition.");
 
@@ -371,7 +419,6 @@ pub const Compiler = struct {
 
     fn resolveLocal(self: *Compiler, name: []const u8) ?u8 {
         if (self.localCount == 0) return null;
-        std.debug.print("Resolve local name={s} localCount={d}\n", .{ name, self.localCount });
         var i: isize = self.localCount - 1;
         while (i >= 0) : (i -= 1) {
             if (std.mem.eql(u8, self.locals[@intCast(i)].name, name)) {
