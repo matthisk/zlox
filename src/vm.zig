@@ -159,6 +159,7 @@ pub const VM = struct {
                 OpCode.OP_PRINT => {
                     const v = self.stack.pop().?;
                     value.print(v);
+                    std.debug.print("\n", .{});
                 },
                 OpCode.OP_DEFINE_GLOBAL => {
                     const identifier = self.readConstant();
@@ -200,7 +201,8 @@ pub const VM = struct {
                     }
                 },
                 OpCode.OP_JUMP => {
-                    self.ip += self.readShort();
+                    const offset = self.readShort();
+                    self.ip += offset;
                 },
                 OpCode.ILLEGAL => {
                     return InterpretResult.RUNTIME_ERROR;

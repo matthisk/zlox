@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const DEBUG_SCANNER = true;
+const DEBUG_SCANNER = false;
 
 pub const TokenType = enum {
     // Single-character tokens.

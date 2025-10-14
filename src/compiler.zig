@@ -37,7 +37,7 @@ const Local = struct {
 
 const UINT8_COUNT = std.math.maxInt(u8) + 1;
 const UINT16_MAX = std.math.maxInt(u16);
-const DEBUG_PRINT_CODE = true;
+const DEBUG_PRINT_CODE = false;
 
 pub const Compiler = struct {
     allocator: std.mem.Allocator,
@@ -171,13 +171,16 @@ pub const Compiler = struct {
         self.consume(TokenType.TOKEN_RIGHT_PAREN, "Expect ')' after condition.");
 
         const thenJump = try self.emitJump(OpCode.OP_JUMP_IF_FALSE);
+
+        try self.emitOp(OpCode.OP_POP);
         try self.statement();
 
-        const elseJump = try self.emitJump(OpCode.OP_JUMP);
+        const elseJump = try self.emitJump(OpCode.OP_JUMP); // 0008
         try self.patchJump(thenJump);
+        try self.emitOp(OpCode.OP_POP); // 0011
 
         if (self.match(TokenType.TOKEN_ELSE)) {
-            try self.statement();
+            try self.statement(); // 0012 - 0014
         }
 
         try self.patchJump(elseJump);
@@ -461,6 +464,8 @@ pub const Compiler = struct {
     }
 
     fn patchJump(self: *Compiler, offset: usize) !void {
+        // -2 to adjust for the bytecode for the jump offset itself.
+        // (this offset is already handled by the VM)
         const jump = self.chunk.code.items.len - offset - 2;
 
         if (jump > UINT16_MAX) {

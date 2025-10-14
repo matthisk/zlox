@@ -3,3 +3,9 @@ if (true) {
 } else {
   print "goodby world";
 }
+
+if (false) {
+  print "goodbye world";
+} else {
+  print "hello world";
+}
