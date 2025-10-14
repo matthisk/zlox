@@ -204,6 +204,10 @@ pub const VM = struct {
                     const offset = self.readShort();
                     self.ip += offset;
                 },
+                OpCode.OP_LOOP => {
+                    const offset = self.readShort();
+                    self.ip -= offset;
+                },
                 OpCode.ILLEGAL => {
                     return InterpretResult.RUNTIME_ERROR;
                 },

@@ -28,6 +28,7 @@ pub const OpCode = enum(u8) {
     OP_SET_LOCAL,
     OP_JUMP_IF_FALSE,
     OP_JUMP,
+    OP_LOOP,
     ILLEGAL,
 };
 
@@ -169,6 +170,9 @@ pub const Chunk = struct {
             },
             OpCode.OP_JUMP => {
                 return self.jumpInstruction("OP_JUMP", offset);
+            },
+            OpCode.OP_LOOP => {
+                return self.jumpInstruction("OP_LOOP", offset);
             },
             OpCode.ILLEGAL => {
                 return self.simpleInstruction("", offset);

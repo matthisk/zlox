@@ -138,6 +138,8 @@ pub const Compiler = struct {
             try self.endScope();
         } else if (self.match(TokenType.TOKEN_IF)) {
             try self.ifStatement();
+        } else if (self.match(TokenType.TOKEN_WHILE)) {
+            try self.whileStatement();
         } else {
             try self.expressionStatement();
         }
@@ -163,6 +165,23 @@ pub const Compiler = struct {
         }
 
         self.consume(TokenType.TOKEN_RIGHT_BRACE, "Expect '}' after block.");
+    }
+
+    fn whileStatement(self: *Compiler) !void {
+        const loopStart = self.chunk.code.items.len;
+
+        self.consume(TokenType.TOKEN_LEFT_PAREN, "Expect '(' after if.");
+        try self.expression();
+        self.consume(TokenType.TOKEN_RIGHT_PAREN, "Expect ')' after condition.");
+
+        const exitJump = try self.emitJump(OpCode.OP_JUMP_IF_FALSE);
+        try self.emitOp(OpCode.OP_POP);
+
+        try self.statement();
+        try self.emitLoop(loopStart);
+
+        try self.patchJump(exitJump);
+        try self.emitOp(OpCode.OP_POP);
     }
 
     fn ifStatement(self: *Compiler) !void {
@@ -351,6 +370,8 @@ pub const Compiler = struct {
     }
 
     fn resolveLocal(self: *Compiler, name: []const u8) ?u8 {
+        if (self.localCount == 0) return null;
+        std.debug.print("Resolve local name={s} localCount={d}\n", .{ name, self.localCount });
         var i: isize = self.localCount - 1;
         while (i >= 0) : (i -= 1) {
             if (std.mem.eql(u8, self.locals[@intCast(i)].name, name)) {
@@ -474,6 +495,16 @@ pub const Compiler = struct {
         }
         try self.emitByte(b1);
         try self.emitByte(b2);
+    }
+
+    fn emitLoop(self: *Compiler, loopStart: usize) !void {
+        try self.emitOp(OpCode.OP_LOOP);
+
+        const offset = self.chunk.code.items.len - loopStart + 2;
+        if (offset > UINT16_MAX) self.errorAtCurrent("Loop body too large.");
+
+        try self.emitByte(@intCast((offset >> 8) & 0xFF));
+        try self.emitByte(@intCast(offset & 0xFF));
     }
 
     fn emitJump(self: *Compiler, op: OpCode) !usize {
