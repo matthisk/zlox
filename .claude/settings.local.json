@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(zig test:*)",
+      "Bash(git add:*)",
+      "Bash(zig build)",
+      "Bash(zig build:*)",
+      "Bash(git log:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
