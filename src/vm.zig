@@ -16,7 +16,7 @@ const BinaryOperator = enum { PLUS, MULTIPLY, DIVIDE, SUBTRACT, LESS, GREATER };
 
 const Errors = error{RuntimeError};
 
-const DEBUG_TRACE_EXECUTION = true;
+const DEBUG_TRACE_EXECUTION = false;
 
 pub const VM = struct {
     allocator: std.mem.Allocator,
@@ -103,8 +103,7 @@ pub const VM = struct {
                 OpCode.OP_NEGATE => {
                     switch (self.stack.getLast()) {
                         .number => {
-                            const a = self.stack.pop().?.number;
-                            try self.stack.append(self.allocator, value.numberValue(-a));
+                            self.stack.items[self.stack.items.len - 1].number *= -1;
                         },
                         else => {
                             self.runtimeError("Operand must be a number.", .{});
@@ -166,11 +165,12 @@ pub const VM = struct {
                     std.debug.print("\n", .{});
                 },
                 OpCode.OP_DEFINE_GLOBAL => {
-                    const identifier = self.readConstant();
+                    // TODO: We globals shouldn't always require a long constant slot.
+                    const identifier = self.readLongConstant();
                     try self.globals.put(identifier.obj.data.str.chars, self.stack.pop().?);
                 },
                 OpCode.OP_GET_GLOBAL => {
-                    const identfier = self.readConstant();
+                    const identfier = self.readLongConstant();
                     const v = self.globals.get(identfier.obj.data.str.chars);
 
                     if (v == null) {
@@ -181,7 +181,7 @@ pub const VM = struct {
                     }
                 },
                 OpCode.OP_SET_GLOBAL => {
-                    const identifier = self.readConstant();
+                    const identifier = self.readLongConstant();
                     const name = identifier.obj.data.str.chars;
                     if (self.globals.contains(name)) {
                         try self.globals.put(name, self.peekStack(0));
