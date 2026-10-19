@@ -27,3 +27,6 @@ Thumbs.db
 *.bak
 *.tmp
 *.orig
+
+# Direnv
+.direnv
