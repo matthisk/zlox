@@ -267,7 +267,7 @@ pub const Compiler = struct {
         try self.defineVariable(global);
     }
 
-    fn parseVariable(self: *Compiler, errorMessage: []const u8) !u8 {
+    fn parseVariable(self: *Compiler, errorMessage: []const u8) !u24 {
         self.consume(TokenType.TOKEN_IDENTIFIER, errorMessage);
         try self.declareVariable();
         if (self.scopeDepth > 0) {
@@ -310,7 +310,7 @@ pub const Compiler = struct {
         self.localCount += 1;
     }
 
-    fn identifierConstant(self: *Compiler) !u8 {
+    fn identifierConstant(self: *Compiler) !u24 {
         const obj = try value_mod.copyString(self.allocator, self.vm, self.previous.lexeme);
         const constant = self.chunk.findValue(obj.data.str.chars);
         if (constant != null) {
@@ -320,11 +320,12 @@ pub const Compiler = struct {
         return try self.makeConstant(value_mod.objValue(obj));
     }
 
-    fn defineVariable(self: *Compiler, global: u8) !void {
+    fn defineVariable(self: *Compiler, global: u24) !void {
         if (self.scopeDepth > 0) {
             return;
         }
-        try self.emitBytes(@intFromEnum(OpCode.OP_DEFINE_GLOBAL), global);
+        try self.emitByte(@intFromEnum(OpCode.OP_DEFINE_GLOBAL));
+        try self.emitMedium(global);
     }
 
     fn printStatement(self: *Compiler) !void {
@@ -412,13 +413,15 @@ pub const Compiler = struct {
 
         if (canAssign and self.match(TokenType.TOKEN_EQUAL)) {
             try self.expression();
-            try self.emitBytes(@intFromEnum(setOp), arg.?);
+            try self.emitByte(@intFromEnum(setOp));
         } else {
-            try self.emitBytes(@intFromEnum(getOp), arg.?);
+            try self.emitByte(@intFromEnum(getOp));
         }
+
+        try self.emitMedium(arg.?);
     }
 
-    fn resolveLocal(self: *Compiler, name: []const u8) ?u8 {
+    fn resolveLocal(self: *Compiler, name: []const u8) ?u24 {
         if (self.localCount == 0) return null;
         var i: isize = self.localCount - 1;
         while (i >= 0) : (i -= 1) {
@@ -533,7 +536,15 @@ pub const Compiler = struct {
     }
 
     fn emitConstant(self: *Compiler, value: Value) !void {
-        try self.emitBytes(@intFromEnum(OpCode.OP_CONSTANT), try self.makeConstant(value));
+        const index = try self.makeConstant(value);
+
+        if (index <= 0xFF) {
+            try self.emitByte(@intFromEnum(OpCode.OP_CONSTANT));
+            try self.emitByte(@intCast(index));
+        } else {
+            try self.emitByte(@intFromEnum(OpCode.OP_CONSTANT_LONG));
+            try self.emitMedium(index);
+        }
     }
 
     fn emitBytes(self: *Compiler, b1: u8, b2: u8) !void {
@@ -543,6 +554,23 @@ pub const Compiler = struct {
         }
         try self.emitByte(b1);
         try self.emitByte(b2);
+    }
+
+    fn emitMedium(self: *Compiler, n: u24) !void {
+        // TODO: If n < 255 we can immediately emit the byte.
+        var buffer: [3]u8 = undefined;
+        const bytes = try toBytes(n, &buffer);
+
+        try self.emitManyBytes(bytes);
+    }
+
+    fn emitManyBytes(self: *Compiler, bs: []const u8) !void {
+        if (comptime DEBUG_PRINT_CODE) {
+            std.debug.print("COMPILER > Emit bytes='{x}'\n", .{bs});
+        }
+        for (bs) |b| {
+            try self.emitByte(b);
+        }
     }
 
     fn emitLoop(self: *Compiler, loopStart: usize) !void {
@@ -586,7 +614,7 @@ pub const Compiler = struct {
         try self.chunk.writeChunk(b, self.previous.line);
     }
 
-    fn makeConstant(self: *Compiler, v: Value) !u8 {
+    fn makeConstant(self: *Compiler, v: Value) !u24 {
         return self.chunk.addValue(v);
     }
 
@@ -609,6 +637,11 @@ pub const Compiler = struct {
         self.hadError = true;
     }
 };
+
+fn toBytes(n: u24, buffer: *[3]u8) ![]const u8 {
+    std.mem.writeInt(u24, buffer, n, .big);
+    return buffer[0..];
+}
 
 fn nextPrecedence(precedence: Precedence) Precedence {
     return @enumFromInt(@intFromEnum(precedence) + 1);

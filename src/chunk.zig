@@ -8,6 +8,7 @@ pub const OpCode = enum(u8) {
     OP_FALSE,
     OP_NIL,
     OP_CONSTANT,
+    OP_CONSTANT_LONG,
     OP_NEGATE,
     OP_NOT,
     OP_ADD,
@@ -87,10 +88,16 @@ pub const Chunk = struct {
         return self.lines.items.len - 1;
     }
 
-    pub fn addValue(self: *Chunk, v: Value) (std.mem.Allocator.Error || ChunkErrors)!u8 {
+    pub fn addValue(self: *Chunk, v: Value) (std.mem.Allocator.Error || ChunkErrors)!u24 {
         try self.data.append(self.allocator, v);
-        // We only have 255 data slots available in our VM.
-        return std.math.cast(u8, self.data.items.len - 1) orelse return ChunkErrors.OutOfConstantDataSlots;
+
+        const index = self.data.items.len - 1;
+        // We only have 2^24 data slots available in our VM.
+        if (index > std.math.maxInt(u24)) {
+            return ChunkErrors.OutOfConstantDataSlots;
+        }
+
+        return @intCast(index);
     }
 
     pub fn findValue(self: *Chunk, v: []const u8) ?u8 {
@@ -143,6 +150,9 @@ pub const Chunk = struct {
             },
             OpCode.OP_CONSTANT => {
                 return self.constantInstruction("OP_CONSTANT", offset);
+            },
+            OpCode.OP_CONSTANT_LONG => {
+                return self.longConstantInstruction("OP_CONSTANT_LONG", offset);
             },
             OpCode.OP_NEGATE => {
                 return self.simpleInstruction("OP_NEGATE", offset);
@@ -223,6 +233,16 @@ pub const Chunk = struct {
         value_mod.print(v);
         std.debug.print("\n", .{});
         return offset + 2;
+    }
+
+    fn longConstantInstruction(self: *Chunk, comptime name: []const u8, offset: usize) usize {
+        const bs = self.code.items[offset + 1 ..][0..3];
+        const loc: u24 = std.mem.readInt(u24, bs, .big);
+        const v: Value = self.data.items[loc];
+        std.debug.print("{s} [{d}] ", .{ name, loc });
+        value_mod.print(v);
+        std.debug.print("\n", .{});
+        return offset + 4;
     }
 
     fn jumpInstruction(self: *Chunk, comptime name: []const u8, offset: usize) usize {

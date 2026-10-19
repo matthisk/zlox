@@ -93,6 +93,10 @@ pub const VM = struct {
                     const constant = self.readConstant();
                     try self.stack.append(self.allocator, constant);
                 },
+                OpCode.OP_CONSTANT_LONG => {
+                    const constant = self.readLongConstant();
+                    try self.stack.append(self.allocator, constant);
+                },
                 OpCode.OP_NOT => {
                     try self.stack.append(self.allocator, value.boolValue(isFalsey(self.stack.pop().?)));
                 },
@@ -230,8 +234,21 @@ pub const VM = struct {
         return (@as(u16, high) << 8) | low;
     }
 
+    inline fn readMedium(self: *VM) u24 {
+        const high = self.ip[0];
+        const mid = self.ip[1];
+        const low = self.ip[2];
+        self.ip += 3;
+        return (@as(u24, high) << 16) | (@as(u24, mid) << 8) | low;
+    }
+
     inline fn readConstant(self: *VM) Value {
         const pos = self.readByte();
+        return self.chunk.data.items[pos];
+    }
+
+    inline fn readLongConstant(self: *VM) Value {
+        const pos = self.readMedium();
         return self.chunk.data.items[pos];
     }
 
