@@ -40,6 +40,7 @@ const UINT16_MAX = std.math.maxInt(u16);
 const DEBUG_PRINT_CODE = true;
 
 pub const Compiler = struct {
+    io: std.Io,
     allocator: std.mem.Allocator,
     scanner: *Scanner,
     vm: *VM,
@@ -52,8 +53,8 @@ pub const Compiler = struct {
     localCount: u8 = 0,
     scopeDepth: usize = 0,
 
-    pub fn init(allocator: std.mem.Allocator, scanner: *Scanner, vm: *VM) Compiler {
-        var compiler = Compiler{ .allocator = allocator, .scanner = scanner, .vm = vm };
+    pub fn init(io: std.Io, allocator: std.mem.Allocator, scanner: *Scanner, vm: *VM) Compiler {
+        var compiler = Compiler{ .io = io, .allocator = allocator, .scanner = scanner, .vm = vm };
 
         compiler.rules = ParseRules.initUndefined();
 
@@ -594,19 +595,17 @@ pub const Compiler = struct {
     }
 
     fn errorAt(self: *Compiler, token: Token, msg: []const u8) void {
-        var writer = std.io.getStdErr().writer();
-
-        writer.print("[line {d}] Error", .{token.line}) catch {};
+        std.debug.print("[line {d}] Error", .{token.line});
 
         if (token.type == TokenType.TOKEN_EOF) {
-            writer.print(" at end", .{}) catch {};
+            std.debug.print(" at end", .{});
         } else if (token.type == TokenType.TOKEN_ERROR) {
             // nothing.
         } else {
-            writer.print(" at '{s}'", .{token.lexeme}) catch {};
+            std.debug.print(" at '{s}'", .{token.lexeme});
         }
 
-        writer.print(": {s}\n", .{msg}) catch {};
+        std.debug.print(": {s}\n", .{msg});
         self.hadError = true;
     }
 };

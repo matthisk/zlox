@@ -35,31 +35,34 @@ pub const OpCode = enum(u8) {
 pub const ChunkErrors = error{OutOfConstantDataSlots};
 
 pub const Chunk = struct {
+    allocator: std.mem.Allocator,
     code: std.ArrayList(u8) = undefined,
     data: std.ArrayList(Value) = undefined,
     lines: std.ArrayList(usize) = undefined,
 
     pub fn init(allocator: std.mem.Allocator) Chunk {
         return Chunk{
-            .code = std.ArrayList(u8).init(allocator),
-            .data = std.ArrayList(Value).init(allocator),
-            .lines = std.ArrayList(usize).init(allocator),
+            .allocator = allocator,
+            .code = std.ArrayList(u8).empty,
+            .data = std.ArrayList(Value).empty,
+            .lines = std.ArrayList(usize).empty,
         };
     }
 
     pub fn deinit(self: *Chunk) void {
-        self.code.deinit();
-        self.data.deinit();
-        self.lines.deinit();
+        self.code.deinit(self.allocator);
+        self.data.deinit(self.allocator);
+        self.lines.deinit(self.allocator);
     }
 
     pub fn writeChunk(self: *Chunk, b: u8, l: usize) std.mem.Allocator.Error!void {
-        try self.code.append(b);
-        try self.lines.append(l);
+        try self.code.append(self.allocator, b);
+        try self.lines.append(self.allocator, l);
     }
 
     pub fn addValue(self: *Chunk, v: Value) (std.mem.Allocator.Error || ChunkErrors)!u8 {
-        try self.data.append(v);
+        try self.data.append(self.allocator, v);
+        // We only have 255 data slots available in our VM.
         return std.math.cast(u8, self.data.items.len - 1) orelse return ChunkErrors.OutOfConstantDataSlots;
     }
 
@@ -94,7 +97,7 @@ pub const Chunk = struct {
             std.debug.print("{:>4} ", .{self.lines.items[offset]});
         }
 
-        const op: OpCode = std.meta.intToEnum(OpCode, self.code.items[offset]) catch OpCode.ILLEGAL;
+        const op: OpCode = std.enums.fromInt(OpCode, self.code.items[offset]) orelse OpCode.ILLEGAL;
         switch (op) {
             OpCode.OP_RETURN => {
                 return self.simpleInstruction("OP_RETURN", offset);

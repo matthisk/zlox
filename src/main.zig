@@ -1,28 +1,25 @@
 const std = @import("std");
 const Engine = @import("engine.zig").Engine;
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+pub fn main(init: std.process.Init) !void {
+    const allocator = init.arena.allocator();
 
-    const args = try std.process.argsAlloc(allocator);
-    defer std.process.argsFree(allocator, args);
+    const args = try init.minimal.args.toSlice(allocator);
 
-    var engine = Engine.init(allocator);
+    var engine = Engine.init(init.io, allocator);
     defer engine.deinit();
 
     if (args.len > 1) {
         const file_path = args[1];
-        const file = std.fs.cwd().openFile(file_path, .{}) catch |err| {
+        const file = std.Io.Dir.cwd().openFile(init.io, file_path, .{}) catch |err| {
             std.debug.print("Error opening file '{s}': {}\n", .{ file_path, err });
             return;
         };
-        defer file.close();
+        defer file.close(init.io);
 
-        const file_size = try file.getEndPos();
+        const file_size = try file.length(init.io);
         const source = try allocator.alloc(u8, file_size);
-        _ = try file.readAll(source);
+        _ = try file.readPositionalAll(init.io, source, 0);
 
         defer allocator.free(source);
 
@@ -30,17 +27,19 @@ pub fn main() !void {
             std.debug.print("Error: {}\n", .{err});
         };
     } else {
-        var buffer = std.ArrayList(u8).init(allocator);
-        defer buffer.deinit();
+        var buffer = std.ArrayList(u8).empty;
+        defer buffer.deinit(allocator);
+
+        var stdin_buffer: [1024]u8 = undefined;
+        var reader = std.Io.File.stdin().readerStreaming(init.io, &stdin_buffer);
+        const stdin = &reader.interface;
 
         while (true) {
-            const stdin = std.io.getStdIn().reader();
-
             std.debug.print("> ", .{});
 
-            buffer.clearRetainingCapacity();
+            buffer.clearAndFree(allocator);
 
-            stdin.streamUntilDelimiter(buffer.writer(), '\n', null) catch |err| switch (err) {
+            const line = stdin.takeDelimiterInclusive('\n') catch |err| switch (err) {
                 error.EndOfStream => {
                     std.debug.print("\nGoodbye!\n", .{});
                     return;
@@ -48,7 +47,8 @@ pub fn main() !void {
                 else => return err,
             };
 
-            try buffer.append(0);
+            try buffer.appendSlice(allocator, line);
+            try buffer.append(allocator, 0);
 
             engine.execute(buffer.items) catch |err| {
                 std.debug.print("Error: {}\n", .{err});

@@ -10,14 +10,16 @@ const Compiler = compiler_mod.Compiler;
 const VM = vm_mod.VM;
 
 pub const Engine = struct {
+    io: std.Io,
     allocator: std.mem.Allocator,
     vm: VM,
     persistent_chunk: Chunk,
 
-    pub fn init(allocator: std.mem.Allocator) Engine {
+    pub fn init(io: std.Io, allocator: std.mem.Allocator) Engine {
         var persistent_chunk = Chunk.init(allocator);
         const vm = VM.init(allocator, &persistent_chunk);
         return Engine{
+            .io = io,
             .allocator = allocator,
             .vm = vm,
             .persistent_chunk = persistent_chunk,
@@ -34,7 +36,7 @@ pub const Engine = struct {
         defer chunk.deinit();
 
         var scanner = Scanner.init(source.ptr);
-        var compiler = Compiler.init(self.allocator, &scanner, &self.vm);
+        var compiler = Compiler.init(self.io, self.allocator, &scanner, &self.vm);
 
         compiler.compile(&chunk) catch |err| switch (err) {
             std.mem.Allocator.Error.OutOfMemory => {

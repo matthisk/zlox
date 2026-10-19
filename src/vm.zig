@@ -31,7 +31,7 @@ pub const VM = struct {
         return VM{
             .allocator = allocator,
             .chunk = chunk,
-            .stack = std.ArrayList(Value).init(allocator),
+            .stack = std.ArrayList(Value).empty,
             .strings = std.StringHashMap(*Obj).init(allocator),
             .globals = std.StringHashMap(Value).init(allocator),
             .objects = null,
@@ -40,7 +40,7 @@ pub const VM = struct {
     }
 
     pub fn deinit(self: *VM) void {
-        self.stack.deinit();
+        self.stack.deinit(self.allocator);
         self.strings.deinit();
         self.globals.deinit();
         var object = self.objects;
@@ -75,32 +75,32 @@ pub const VM = struct {
                 }
             }
 
-            const instruction: OpCode = std.meta.intToEnum(OpCode, self.readByte()) catch OpCode.ILLEGAL;
+            const instruction: OpCode = std.enums.fromInt(OpCode, self.readByte()) orelse OpCode.ILLEGAL;
             switch (instruction) {
                 OpCode.OP_RETURN => {
                     return InterpretResult.OK;
                 },
                 OpCode.OP_TRUE => {
-                    try self.stack.append(value.boolValue(true));
+                    try self.stack.append(self.allocator, value.boolValue(true));
                 },
                 OpCode.OP_FALSE => {
-                    try self.stack.append(value.boolValue(false));
+                    try self.stack.append(self.allocator, value.boolValue(false));
                 },
                 OpCode.OP_NIL => {
-                    try self.stack.append(value.nilValue());
+                    try self.stack.append(self.allocator, value.nilValue());
                 },
                 OpCode.OP_CONSTANT => {
                     const constant = self.readConstant();
-                    try self.stack.append(constant);
+                    try self.stack.append(self.allocator, constant);
                 },
                 OpCode.OP_NOT => {
-                    try self.stack.append(value.boolValue(isFalsey(self.stack.pop().?)));
+                    try self.stack.append(self.allocator, value.boolValue(isFalsey(self.stack.pop().?)));
                 },
                 OpCode.OP_NEGATE => {
                     switch (self.stack.getLast()) {
                         .number => {
                             const a = self.stack.pop().?.number;
-                            try self.stack.append(value.numberValue(-a));
+                            try self.stack.append(self.allocator, value.numberValue(-a));
                         },
                         else => {
                             self.runtimeError("Operand must be a number.", .{});
@@ -131,17 +131,17 @@ pub const VM = struct {
                 OpCode.OP_AND => {
                     const b = self.stack.pop().?;
                     const a = self.stack.pop().?;
-                    try self.stack.append(value.boolValue(isTruthy(a) and isTruthy(b)));
+                    try self.stack.append(self.allocator, value.boolValue(isTruthy(a) and isTruthy(b)));
                 },
                 OpCode.OP_OR => {
                     const b = self.stack.pop().?;
                     const a = self.stack.pop().?;
-                    try self.stack.append(value.boolValue(isTruthy(a) or isTruthy(b)));
+                    try self.stack.append(self.allocator, value.boolValue(isTruthy(a) or isTruthy(b)));
                 },
                 OpCode.OP_EQUALS => {
                     const b = self.stack.pop().?;
                     const a = self.stack.pop().?;
-                    try self.stack.append(value.boolValue(self.valuesEqual(a, b)));
+                    try self.stack.append(self.allocator, value.boolValue(self.valuesEqual(a, b)));
                 },
                 OpCode.OP_LESS => {
                     self.binaryOp(BinaryOperator.LESS) catch {
@@ -173,7 +173,7 @@ pub const VM = struct {
                         self.runtimeError("Undefined variable '{s}'", .{identfier.obj.data.str.chars});
                         return InterpretResult.RUNTIME_ERROR;
                     } else {
-                        try self.stack.append(v.?);
+                        try self.stack.append(self.allocator, v.?);
                     }
                 },
                 OpCode.OP_SET_GLOBAL => {
@@ -188,7 +188,7 @@ pub const VM = struct {
                 },
                 OpCode.OP_GET_LOCAL => {
                     const slot = self.readByte();
-                    try self.stack.append(self.stack.items[slot]);
+                    try self.stack.append(self.allocator, self.stack.items[slot]);
                 },
                 OpCode.OP_SET_LOCAL => {
                     const slot = self.readByte();
@@ -251,7 +251,7 @@ pub const VM = struct {
                 .LESS => value.boolValue(a < b),
                 .GREATER => value.boolValue(a > b),
             };
-            try self.stack.append(result);
+            try self.stack.append(self.allocator, result);
         } else {
             self.runtimeError("Operands must be numbers.", .{});
             return Errors.RuntimeError;
@@ -265,7 +265,7 @@ pub const VM = struct {
         const chars = try std.mem.concat(self.allocator, u8, &[_][]const u8{ a, b });
         const v = value.objValue(try value.takeString(self.allocator, self, chars));
 
-        try self.stack.append(v);
+        try self.stack.append(self.allocator, v);
     }
 
     inline fn valuesEqual(_: *VM, a: Value, b: Value) bool {
