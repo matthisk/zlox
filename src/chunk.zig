@@ -57,7 +57,34 @@ pub const Chunk = struct {
 
     pub fn writeChunk(self: *Chunk, b: u8, l: usize) std.mem.Allocator.Error!void {
         try self.code.append(self.allocator, b);
-        try self.lines.append(self.allocator, l);
+
+        const currentLine = self.lines.items.len;
+        if (currentLine == 0) {
+            try self.lines.append(self.allocator, 0);
+        } else if (l > currentLine) {
+            var d = l - currentLine;
+
+            // Empty lines don't receive bytecode so we need to make sure we fill the lines array for those lines.
+            while (d > 1) {
+                try self.lines.append(self.allocator, self.code.items.len - 1);
+                d -= 1;
+            }
+
+            try self.lines.append(self.allocator, self.code.items.len - 1);
+        }
+    }
+
+    pub fn getLine(self: *Chunk, i: usize) usize {
+        var prevCodeIndex: usize = 0;
+
+        for (self.lines.items, 0..) |codeIndex, lineNumber| {
+            if (i < codeIndex and i >= prevCodeIndex) {
+                return lineNumber;
+            }
+            prevCodeIndex = codeIndex;
+        }
+
+        return self.lines.items.len - 1;
     }
 
     pub fn addValue(self: *Chunk, v: Value) (std.mem.Allocator.Error || ChunkErrors)!u8 {
@@ -91,10 +118,10 @@ pub const Chunk = struct {
 
     pub fn disassembleInstruction(self: *Chunk, offset: usize) usize {
         std.debug.print("{:0>4} ", .{offset});
-        if (offset > 0 and self.lines.items[offset] == self.lines.items[offset - 1]) {
+        if (offset > 0 and self.getLine(offset) == self.getLine(offset - 1)) {
             std.debug.print("   | ", .{});
         } else {
-            std.debug.print("{:>4} ", .{self.lines.items[offset]});
+            std.debug.print("{:>4} ", .{self.getLine(offset)});
         }
 
         const op: OpCode = std.enums.fromInt(OpCode, self.code.items[offset]) orelse OpCode.ILLEGAL;
