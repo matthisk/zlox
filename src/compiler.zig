@@ -152,6 +152,9 @@ pub const Compiler = struct {
         compiler.rules.set(TokenType.TOKEN_TRUE, ParseRule{ .prefix = literal, .infix = null, .precedence = Precedence.NONE });
         compiler.rules.set(TokenType.TOKEN_VAR, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
         compiler.rules.set(TokenType.TOKEN_WHILE, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
+        compiler.rules.set(TokenType.TOKEN_SWITCH, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
+        compiler.rules.set(TokenType.TOKEN_CASE, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
+        compiler.rules.set(TokenType.TOKEN_DEFAULT, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
         compiler.rules.set(TokenType.TOKEN_ERROR, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
         compiler.rules.set(TokenType.TOKEN_EOF, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
 
@@ -199,6 +202,8 @@ pub const Compiler = struct {
             try self.whileStatement();
         } else if (self.match(TokenType.TOKEN_FOR)) {
             try self.forStatement();
+        } else if (self.match(TokenType.TOKEN_SWITCH)) {
+            try self.switchStatement();
         } else {
             try self.expressionStatement();
         }
@@ -316,6 +321,67 @@ pub const Compiler = struct {
         }
 
         try self.patchJump(elseJump);
+    }
+
+    fn switchStatement(self: *Compiler) !void {
+        self.consume(TokenType.TOKEN_LEFT_PAREN, "Expect '(' after switch.");
+        try self.expression(); // stack: [...., selector]
+        self.consume(TokenType.TOKEN_RIGHT_PAREN, "Expect ')' after condition.");
+        self.consume(TokenType.TOKEN_LEFT_BRACE, "Expect '{' to open switch clause.");
+
+        var exitJumps = std.ArrayList(usize).empty;
+        defer exitJumps.deinit(self.allocator);
+
+        while (self.match(TokenType.TOKEN_CASE) and !self.match(TokenType.TOKEN_EOF)) {
+            const exitJump = try self.caseClause();
+            try exitJumps.append(self.allocator, exitJump);
+        }
+
+        // No case matched, drop the selector.
+        try self.emitOp(OpCode.OP_POP);
+
+        if (self.match(TokenType.TOKEN_DEFAULT)) {
+            self.consume(TokenType.TOKEN_COLON, "Expect ':'.");
+            try self.switchArmBody();
+        }
+
+        self.consume(TokenType.TOKEN_RIGHT_BRACE, "Expect '}' after switch statement.");
+
+        for (exitJumps.items) |item| {
+            try self.patchJump(item);
+        }
+    }
+
+    fn caseClause(self: *Compiler) !usize {
+        try self.emitOp(OpCode.OP_DUP); // [..., selector, selector]
+        try self.expression(); // [..., selector, selector, expr]
+        self.consume(TokenType.TOKEN_COLON, "Expect ':' after case.");
+        try self.emitOp(OpCode.OP_EQUALS); // [..., selector, bool]
+        const noMatchJump = try self.emitJump(OpCode.OP_JUMP_IF_FALSE);
+        // We remove both the equals result and the selector.
+        // This is safe since we don't need the selector anymore because only 1 case can match.
+        try self.emitOpWithByteOperand(OpCode.OP_POPN, 2); // [...]
+        try self.switchArmBody();
+        const exitJump = try self.emitJump(OpCode.OP_JUMP);
+
+        try self.patchJump(noMatchJump); // [..., selector, bool]
+        try self.emitOp(OpCode.OP_POP); // [..., selector]
+        //
+        return exitJump;
+    }
+
+    fn switchArmBody(self: *Compiler) !void {
+        self.beginScope();
+
+        while (!self.atSwitchBoundary()) {
+            try self.declaration();
+        }
+
+        try self.endScope();
+    }
+
+    fn atSwitchBoundary(self: *Compiler) bool {
+        return self.check(TokenType.TOKEN_CASE) or self.check(TokenType.TOKEN_DEFAULT) or self.check(TokenType.TOKEN_RIGHT_BRACE) or self.check(TokenType.TOKEN_EOF);
     }
 
     fn varDecl(self: *Compiler) !void {

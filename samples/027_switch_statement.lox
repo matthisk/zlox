@@ -1,0 +1,9 @@
+var a = "abc";
+switch (a) {
+  case "abc":
+    print "case 1";
+  case "def":
+    print "case 2";
+  default:
+    print "default";
+}

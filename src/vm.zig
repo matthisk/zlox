@@ -174,6 +174,10 @@ pub const VM = struct {
                         _ = self.stack.pop();
                     }
                 },
+                OpCode.OP_DUP => {
+                    const v = self.peekStack(0);
+                    try self.stack.append(self.allocator, v);
+                },
                 OpCode.OP_PRINT => {
                     const v = self.stack.pop().?;
                     try self.printProgramValue(v);

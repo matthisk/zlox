@@ -48,6 +48,9 @@ pub const TokenType = enum {
     TOKEN_TRUE,
     TOKEN_VAR,
     TOKEN_WHILE,
+    TOKEN_SWITCH,
+    TOKEN_CASE,
+    TOKEN_DEFAULT,
 
     TOKEN_ERROR,
     TOKEN_EOF,
@@ -225,14 +228,33 @@ pub const Scanner = struct {
     fn identifierType(self: *Scanner) TokenType {
         return switch (self.start[0]) {
             'a' => return self.checkKeyword(1, 2, "nd", TokenType.TOKEN_AND),
-            'c' => return self.checkKeyword(1, 4, "lass", TokenType.TOKEN_CLASS),
+            'c' => {
+                if (self.current - self.start > 1) {
+                    return switch (self.start[1]) {
+                        'a' => return self.checkKeyword(1, 3, "ase", TokenType.TOKEN_CASE),
+                        'l' => return self.checkKeyword(1, 4, "lass", TokenType.TOKEN_CLASS),
+                        else => return TokenType.TOKEN_IDENTIFIER,
+                    };
+                }
+                return TokenType.TOKEN_IDENTIFIER;
+            },
+            'd' => return self.checkKeyword(1, 6, "efault", TokenType.TOKEN_DEFAULT),
             'e' => return self.checkKeyword(1, 3, "lse", TokenType.TOKEN_ELSE),
             'i' => return self.checkKeyword(1, 1, "f", TokenType.TOKEN_IF),
             'n' => return self.checkKeyword(1, 2, "il", TokenType.TOKEN_NIL),
             'o' => return self.checkKeyword(1, 1, "r", TokenType.TOKEN_OR),
             'p' => return self.checkKeyword(1, 4, "rint", TokenType.TOKEN_PRINT),
             'r' => return self.checkKeyword(1, 5, "eturn", TokenType.TOKEN_RETURN),
-            's' => return self.checkKeyword(1, 4, "uper", TokenType.TOKEN_SUPER),
+            's' => {
+                if (self.current - self.start > 1) {
+                    return switch (self.start[1]) {
+                        'w' => return self.checkKeyword(1, 5, "witch", TokenType.TOKEN_SWITCH),
+                        'u' => return self.checkKeyword(1, 4, "uper", TokenType.TOKEN_SUPER),
+                        else => TokenType.TOKEN_IDENTIFIER,
+                    };
+                }
+                return TokenType.TOKEN_IDENTIFIER;
+            },
             'v' => return self.checkKeyword(1, 2, "ar", TokenType.TOKEN_VAR),
             'w' => return self.checkKeyword(1, 4, "hile", TokenType.TOKEN_WHILE),
             't' => {
