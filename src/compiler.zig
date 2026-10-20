@@ -102,12 +102,13 @@ pub const Compiler = struct {
     hadError: bool = false,
     chunk: *Chunk = undefined,
     rules: ParseRules = undefined,
-    locals: [UINT8_COUNT]Local = undefined,
-    localCount: u8 = 0,
+    locals: std.ArrayList(Local) = undefined,
     scopeDepth: usize = 0,
 
     pub fn init(io: std.Io, allocator: std.mem.Allocator, scanner: *Scanner, vm: *VM) Compiler {
         var compiler = Compiler{ .io = io, .allocator = allocator, .scanner = scanner, .vm = vm };
+
+        compiler.locals = std.ArrayList(Local).empty;
 
         compiler.rules = ParseRules.initUndefined();
 
@@ -212,12 +213,17 @@ pub const Compiler = struct {
 
         // Pop all variables from this scope, as they are no longer available after scope end.
         var n: u8 = 0;
-        while (self.localCount >= 1 and self.locals[self.localCount - 1].depth > self.scopeDepth) {
+        while (self.locals.items.len >= 1 and self.locals.items[self.locals.items.len - 1].depth > self.scopeDepth) {
             n += 1;
-            self.localCount -= 1;
+            _ = self.locals.pop();
         }
-        try self.emitOp(OpCode.OP_POPN);
-        try self.emitByte(n);
+        if (n < UINT8_COUNT) {
+            try self.emitOp(OpCode.OP_POPN);
+            try self.emitByte(n);
+        } else {
+            try self.emitOp(OpCode.OP_POPN_LONG);
+            try self.emitMedium(n);
+        }
     }
 
     fn block(self: *Compiler) !void {
@@ -338,19 +344,14 @@ pub const Compiler = struct {
         if (self.scopeDepth == 0) return;
 
         const name = self.previous.lexeme;
-        self.addLocal(name);
+        try self.addLocal(name);
     }
 
-    fn addLocal(self: *Compiler, name: []const u8) void {
-        if (self.localCount == UINT8_COUNT) {
-            self.errorAtCurrent("Too many variables in function");
-            return;
-        }
-
-        if (self.localCount > 0) {
-            var i: isize = self.localCount - 1;
-            while (i >= 0) : (i -= 1) {
-                const local = self.locals[@intCast(i)];
+    fn addLocal(self: *Compiler, name: []const u8) !void {
+        if (self.locals.items.len > 0) {
+            var i = self.locals.items.len;
+            while (i > 0) : (i -= 1) {
+                const local = self.locals.items[i - 1];
                 if (local.depth != -1 and local.depth < self.scopeDepth) {
                     break;
                 }
@@ -361,11 +362,7 @@ pub const Compiler = struct {
             }
         }
 
-        var local = &self.locals[self.localCount];
-        local.name = name;
-        local.depth = self.scopeDepth;
-
-        self.localCount += 1;
+        try self.locals.append(self.allocator, Local{ .name = name, .depth = self.scopeDepth });
     }
 
     fn identifierConstant(self: *Compiler) !u24 {
@@ -466,17 +463,17 @@ pub const Compiler = struct {
         } else getOp;
 
         switch (op) {
-            .OP_GET_LOCAL, .OP_SET_LOCAL => try self.emitOpWithByteOperand(op, @intCast(arg.?)),
+            .OP_GET_LOCAL, .OP_SET_LOCAL => try self.emitOpWithMediumOperand(op, @intCast(arg.?)),
             .OP_GET_GLOBAL, .OP_SET_GLOBAL => try self.emitOpWithMediumOperand(op, arg.?),
             else => unreachable,
         }
     }
 
     fn resolveLocal(self: *Compiler, name: []const u8) ?u24 {
-        if (self.localCount == 0) return null;
-        var i: isize = self.localCount - 1;
-        while (i >= 0) : (i -= 1) {
-            if (std.mem.eql(u8, self.locals[@intCast(i)].name, name)) {
+        if (self.locals.items.len == 0) return null;
+        var i = self.locals.items.len;
+        while (i > 0) : (i -= 1) {
+            if (std.mem.eql(u8, self.locals.items[i - 1].name, name)) {
                 return @intCast(i);
             }
         }

@@ -23,6 +23,7 @@ pub const OpCode = enum(u8) {
     OP_PRINT,
     OP_POP,
     OP_POPN,
+    OP_POPN_LONG,
     OP_DEFINE_GLOBAL,
     OP_GET_GLOBAL,
     OP_SET_GLOBAL,
@@ -54,6 +55,11 @@ pub const Chunk = struct {
             switch (op) {
                 .OP_POPN => {
                     const n = self.chunk.code.items[self.offset + 1];
+                    try writer.print("{s} [{d}]", .{ name, n });
+                },
+                .OP_POPN_LONG => {
+                    const bytes = self.chunk.code.items[self.offset + 1 ..][0..3];
+                    const n = std.mem.readInt(u24, bytes, .big);
                     try writer.print("{s} [{d}]", .{ name, n });
                 },
                 .OP_CONSTANT => {

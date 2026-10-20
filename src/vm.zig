@@ -168,6 +168,12 @@ pub const VM = struct {
                         _ = self.stack.pop();
                     }
                 },
+                OpCode.OP_POPN_LONG => {
+                    var n = self.readMedium();
+                    while (n > 0) : (n -= 1) {
+                        _ = self.stack.pop();
+                    }
+                },
                 OpCode.OP_PRINT => {
                     const v = self.stack.pop().?;
                     try self.printProgramValue(v);
@@ -199,11 +205,11 @@ pub const VM = struct {
                     }
                 },
                 OpCode.OP_GET_LOCAL => {
-                    const slot = self.readByte();
+                    const slot = self.readMedium();
                     try self.stack.append(self.allocator, self.stack.items[slot]);
                 },
                 OpCode.OP_SET_LOCAL => {
-                    const slot = self.readByte();
+                    const slot = self.readMedium();
                     self.stack.items[slot] = self.peekStack(0);
                 },
                 OpCode.OP_JUMP_IF_FALSE => {
