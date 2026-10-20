@@ -211,10 +211,13 @@ pub const Compiler = struct {
         self.scopeDepth -= 1;
 
         // Pop all variables from this scope, as they are no longer available after scope end.
+        var n: u8 = 0;
         while (self.localCount >= 1 and self.locals[self.localCount - 1].depth > self.scopeDepth) {
-            try self.emitOp(OpCode.OP_POP);
+            n += 1;
             self.localCount -= 1;
         }
+        try self.emitOp(OpCode.OP_POPN);
+        try self.emitByte(n);
     }
 
     fn block(self: *Compiler) !void {

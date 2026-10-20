@@ -1,0 +1,13 @@
+var a = "aap";
+{
+  var b = "noot";
+  {
+    var c = "mies";
+    {
+      var d = "boom";
+      print a + " " + b + " " + c + " " + d;
+    }
+    var e = "stam";
+  }
+  var f = "tak";
+}

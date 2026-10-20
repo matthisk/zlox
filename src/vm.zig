@@ -162,6 +162,12 @@ pub const VM = struct {
                 OpCode.OP_POP => {
                     _ = self.stack.pop();
                 },
+                OpCode.OP_POPN => {
+                    var n = self.readByte();
+                    while (n > 0) : (n -= 1) {
+                        _ = self.stack.pop();
+                    }
+                },
                 OpCode.OP_PRINT => {
                     const v = self.stack.pop().?;
                     try self.printProgramValue(v);

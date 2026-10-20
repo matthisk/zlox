@@ -22,6 +22,7 @@ pub const OpCode = enum(u8) {
     OP_GREATER,
     OP_PRINT,
     OP_POP,
+    OP_POPN,
     OP_DEFINE_GLOBAL,
     OP_GET_GLOBAL,
     OP_SET_GLOBAL,
@@ -51,6 +52,10 @@ pub const Chunk = struct {
                 tag_name;
 
             switch (op) {
+                .OP_POPN => {
+                    const n = self.chunk.code.items[self.offset + 1];
+                    try writer.print("{s} [{d}]", .{ name, n });
+                },
                 .OP_CONSTANT => {
                     const index = self.chunk.code.items[self.offset + 1];
                     try writer.print("{s} [{d}] {f}", .{ name, index, value_mod.format(self.chunk.data.items[index]) });
