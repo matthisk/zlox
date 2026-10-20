@@ -185,10 +185,10 @@ pub const Chunk = struct {
                 return self.simpleInstruction("OP_GREATER", offset);
             },
             OpCode.OP_DEFINE_GLOBAL => {
-                return self.constantInstruction("OP_DEFINE_GLOBAL", offset);
+                return self.longConstantInstruction("OP_DEFINE_GLOBAL", offset);
             },
             OpCode.OP_GET_GLOBAL => {
-                return self.constantInstruction("OP_GET_GLOBAL", offset);
+                return self.longConstantInstruction("OP_GET_GLOBAL", offset);
             },
             OpCode.OP_SET_GLOBAL => {
                 return self.constantInstruction("OP_SET_GLOBAL", offset);
