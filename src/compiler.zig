@@ -520,13 +520,23 @@ pub const Compiler = struct {
     }
 
     fn ternary(self: *Compiler) !void {
+        // if
+        const thenJump = try self.emitJump(OpCode.OP_JUMP_IF_FALSE);
+        try self.emitOp(OpCode.OP_POP);
+
+        // then
         try self.parsePrecedence(Precedence.ASSIGNMENT);
 
         self.consume(TokenType.TOKEN_COLON, "Expect ':' in ternary expression.");
 
+        const elseJump = try self.emitJump(OpCode.OP_JUMP);
+        try self.patchJump(thenJump);
+        try self.emitOp(OpCode.OP_POP);
+
+        // else
         try self.parsePrecedence(Precedence.TERNARY);
 
-        // TODO: EMIT BYTE CODE.
+        try self.patchJump(elseJump);
     }
 
     fn and_(self: *Compiler) !void {
