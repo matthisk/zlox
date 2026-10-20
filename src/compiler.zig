@@ -28,6 +28,59 @@ const ParseRule = struct {
     precedence: Precedence,
 };
 
+const ParseTrace = struct {
+    token_type: TokenType,
+    precedence: Precedence,
+    line: u32,
+};
+
+const ParseTraceKind = enum { prefix, infix };
+
+const EmitTrace = struct {
+    op: OpCode,
+    operand: ?u24 = null,
+    line: u32,
+};
+
+const CompilerTrace = union(enum) {
+    prefix: ParseTrace,
+    infix: ParseTrace,
+    emit: EmitTrace,
+
+    pub fn format(self: CompilerTrace, writer: *std.Io.Writer) std.Io.Writer.Error!void {
+        switch (self) {
+            .prefix => |trace| {
+                const token_name = @tagName(trace.token_type)["TOKEN_".len..];
+                try writer.print(
+                    "[compiler] line {d: >4} | prefix | {s: <13} | minimum precedence {s}\n",
+                    .{ trace.line, token_name, @tagName(trace.precedence) },
+                );
+            },
+            .infix => |trace| {
+                const token_name = @tagName(trace.token_type)["TOKEN_".len..];
+                try writer.print(
+                    "[compiler] line {d: >4} | infix  | {s: <13} | precedence {s}\n",
+                    .{ trace.line, token_name, @tagName(trace.precedence) },
+                );
+            },
+            .emit => |trace| {
+                const op_name = @tagName(trace.op)["OP_".len..];
+                if (trace.operand) |operand| {
+                    try writer.print(
+                        "[compiler] line {d: >4} | emit   | {s: <13} | operand {d}\n",
+                        .{ trace.line, op_name, operand },
+                    );
+                } else {
+                    try writer.print(
+                        "[compiler] line {d: >4} | emit   | {s}\n",
+                        .{ trace.line, op_name },
+                    );
+                }
+            },
+        }
+    }
+};
+
 const ParseRules = std.EnumArray(TokenType, ParseRule);
 
 const Local = struct {
@@ -37,7 +90,7 @@ const Local = struct {
 
 const UINT8_COUNT = std.math.maxInt(u8) + 1;
 const UINT16_MAX = std.math.maxInt(u16);
-const DEBUG_PRINT_CODE = true;
+const DEBUG_COMPILER = true;
 
 pub const Compiler = struct {
     io: std.Io,
@@ -117,9 +170,9 @@ pub const Compiler = struct {
 
         if (self.hadError) {
             return CompilerError.ParseError;
-        } else if (comptime DEBUG_PRINT_CODE) {
+        } else if (comptime DEBUG_COMPILER) {
             std.debug.print("\n", .{});
-            self.chunk.disassemble("code");
+            self.chunk.disassemble("compiled bytecode");
             std.debug.print("\n", .{});
         }
     }
@@ -159,7 +212,7 @@ pub const Compiler = struct {
 
         // Pop all variables from this scope, as they are no longer available after scope end.
         while (self.localCount >= 1 and self.locals[self.localCount - 1].depth > self.scopeDepth) {
-            try self.emitByte(@intFromEnum(OpCode.OP_POP));
+            try self.emitOp(OpCode.OP_POP);
             self.localCount -= 1;
         }
     }
@@ -326,8 +379,7 @@ pub const Compiler = struct {
         if (self.scopeDepth > 0) {
             return;
         }
-        try self.emitByte(@intFromEnum(OpCode.OP_DEFINE_GLOBAL));
-        try self.emitMedium(global);
+        try self.emitOpWithMediumOperand(OpCode.OP_DEFINE_GLOBAL, global);
     }
 
     fn printStatement(self: *Compiler) !void {
@@ -349,10 +401,6 @@ pub const Compiler = struct {
     fn parsePrecedence(self: *Compiler, precedence: Precedence) !void {
         self.advance();
 
-        if (comptime DEBUG_PRINT_CODE) {
-            std.debug.print("COMPILER > token='{s}'\n", .{@tagName(self.previous.type)});
-        }
-
         const prefixRule = self.rules.get(self.previous.type).prefix;
 
         if (prefixRule == null) {
@@ -360,9 +408,7 @@ pub const Compiler = struct {
             return;
         }
 
-        if (comptime DEBUG_PRINT_CODE) {
-            std.debug.print("COMPILER > Prefix token='{s}' with precedence='{s}' until precendence='{s}'\n", .{ @tagName(self.previous.type), @tagName(precedence), @tagName(self.rules.get(self.current.type).precedence) });
-        }
+        self.traceParse(.prefix, self.previous, precedence);
 
         const canAssign = @intFromEnum(precedence) <= @intFromEnum(Precedence.ASSIGNMENT);
 
@@ -371,9 +417,7 @@ pub const Compiler = struct {
         while (@intFromEnum(precedence) <= @intFromEnum(self.rules.get(self.current.type).precedence)) {
             self.advance();
             const infixRule = self.rules.get(self.previous.type).infix;
-            if (comptime DEBUG_PRINT_CODE) {
-                std.debug.print("COMPILER > Infix token='{s}'\n", .{@tagName(self.previous.type)});
-            }
+            self.traceParse(.infix, self.previous, self.rules.get(self.previous.type).precedence);
             try infixRule.?(self);
         }
 
@@ -415,12 +459,10 @@ pub const Compiler = struct {
 
         if (canAssign and self.match(TokenType.TOKEN_EQUAL)) {
             try self.expression();
-            try self.emitByte(@intFromEnum(setOp));
+            try self.emitOpWithMediumOperand(setOp, arg.?);
         } else {
-            try self.emitByte(@intFromEnum(getOp));
+            try self.emitOpWithMediumOperand(getOp, arg.?);
         }
-
-        try self.emitMedium(arg.?);
     }
 
     fn resolveLocal(self: *Compiler, name: []const u8) ?u24 {
@@ -555,21 +597,19 @@ pub const Compiler = struct {
         const index = try self.makeConstant(value);
 
         if (index <= 0xFF) {
+            self.traceEmit(OpCode.OP_CONSTANT, index);
             try self.emitByte(@intFromEnum(OpCode.OP_CONSTANT));
             try self.emitByte(@intCast(index));
         } else {
+            self.traceEmit(OpCode.OP_CONSTANT_LONG, index);
             try self.emitByte(@intFromEnum(OpCode.OP_CONSTANT_LONG));
             try self.emitMedium(index);
         }
     }
 
     fn emitBytes(self: *Compiler, b1: u8, b2: u8) !void {
-        if (comptime DEBUG_PRINT_CODE) {
-            const op: OpCode = @enumFromInt(b1);
-            std.debug.print("COMPILER > Emit op='{s}' byte='{d}'\n", .{ @tagName(op), b2 });
-        }
-        try self.emitByte(b1);
-        try self.emitByte(b2);
+        try self.emitOp(@enumFromInt(b1));
+        try self.emitOp(@enumFromInt(b2));
     }
 
     fn emitMedium(self: *Compiler, n: u24) !void {
@@ -581,9 +621,6 @@ pub const Compiler = struct {
     }
 
     fn emitManyBytes(self: *Compiler, bs: []const u8) !void {
-        if (comptime DEBUG_PRINT_CODE) {
-            std.debug.print("COMPILER > Emit bytes='{x}'\n", .{bs});
-        }
         for (bs) |b| {
             try self.emitByte(b);
         }
@@ -620,10 +657,14 @@ pub const Compiler = struct {
     }
 
     fn emitOp(self: *Compiler, op: OpCode) !void {
-        if (comptime DEBUG_PRINT_CODE) {
-            std.debug.print("COMPILER > Emit op='{s}'\n", .{@tagName(op)});
-        }
+        self.traceEmit(op, null);
         try self.emitByte(@intFromEnum(op));
+    }
+
+    fn emitOpWithMediumOperand(self: *Compiler, op: OpCode, operand: u24) !void {
+        self.traceEmit(op, operand);
+        try self.emitByte(@intFromEnum(op));
+        try self.emitMedium(operand);
     }
 
     fn emitByte(self: *Compiler, b: u8) !void {
@@ -632,6 +673,31 @@ pub const Compiler = struct {
 
     fn makeConstant(self: *Compiler, v: Value) !u24 {
         return self.chunk.addValue(v);
+    }
+
+    fn traceParse(_: *Compiler, kind: ParseTraceKind, token: Token, precedence: Precedence) void {
+        if (comptime !DEBUG_COMPILER) return;
+
+        const details = ParseTrace{
+            .token_type = token.type,
+            .precedence = precedence,
+            .line = token.line,
+        };
+        const trace: CompilerTrace = switch (kind) {
+            .prefix => .{ .prefix = details },
+            .infix => .{ .infix = details },
+        };
+        std.debug.print("{f}", .{trace});
+    }
+
+    fn traceEmit(self: *Compiler, op: OpCode, operand: ?u24) void {
+        if (comptime !DEBUG_COMPILER) return;
+
+        std.debug.print("{f}", .{CompilerTrace{ .emit = .{
+            .op = op,
+            .operand = operand,
+            .line = self.previous.line,
+        } }});
     }
 
     fn errorAtCurrent(self: *Compiler, msg: []const u8) void {
@@ -661,6 +727,44 @@ fn toBytes(n: u24, buffer: *[3]u8) ![]const u8 {
 
 fn nextPrecedence(precedence: Precedence) Precedence {
     return @enumFromInt(@intFromEnum(precedence) + 1);
+}
+
+test "compiler trace is compact and readable" {
+    try std.testing.expectFmt(
+        "[compiler] line    2 | prefix | NUMBER        | minimum precedence ASSIGNMENT\n",
+        "{f}",
+        .{CompilerTrace{ .prefix = .{
+            .token_type = TokenType.TOKEN_NUMBER,
+            .precedence = Precedence.ASSIGNMENT,
+            .line = 2,
+        } }},
+    );
+    try std.testing.expectFmt(
+        "[compiler] line    2 | infix  | PLUS          | precedence TERM\n",
+        "{f}",
+        .{CompilerTrace{ .infix = .{
+            .token_type = TokenType.TOKEN_PLUS,
+            .precedence = Precedence.TERM,
+            .line = 2,
+        } }},
+    );
+    try std.testing.expectFmt(
+        "[compiler] line    2 | emit   | CONSTANT      | operand 7\n",
+        "{f}",
+        .{CompilerTrace{ .emit = .{
+            .op = OpCode.OP_CONSTANT,
+            .operand = 7,
+            .line = 2,
+        } }},
+    );
+    try std.testing.expectFmt(
+        "[compiler] line    2 | emit   | ADD\n",
+        "{f}",
+        .{CompilerTrace{ .emit = .{
+            .op = OpCode.OP_ADD,
+            .line = 2,
+        } }},
+    );
 }
 
 test "compiler" {

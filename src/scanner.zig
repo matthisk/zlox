@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const DEBUG_SCANNER = true;
+const DEBUG_LEXEME_LIMIT = 40;
 
 pub const TokenType = enum {
     // Single-character tokens.
@@ -58,16 +59,55 @@ pub const Token = struct {
     line: u32,
 };
 
+const TokenTrace = struct {
+    token_type: TokenType,
+    lexeme: []const u8,
+    line: u32,
+    message: ?[]const u8 = null,
+
+    pub fn format(self: TokenTrace, writer: *std.Io.Writer) std.Io.Writer.Error!void {
+        const token_name = @tagName(self.token_type)["TOKEN_".len..];
+
+        if (self.token_type == TokenType.TOKEN_EOF) {
+            try writer.print("[scanner]  line {d: >4} | {s}\n", .{ self.line, token_name });
+            return;
+        }
+
+        try writer.print("[scanner]  line {d: >4} | {s: <13} | ", .{ self.line, token_name });
+
+        var lexeme = self.lexeme;
+        if (self.token_type == TokenType.TOKEN_STRING and lexeme.len >= 2) {
+            lexeme = lexeme[1 .. lexeme.len - 1];
+        }
+
+        const preview_length = @min(lexeme.len, DEBUG_LEXEME_LIMIT);
+        const preview = lexeme[0..preview_length];
+        const ellipsis: []const u8 = if (preview_length < lexeme.len) "..." else "";
+
+        try writer.print("\"{f}\"{s}", .{
+            std.zig.fmtString(preview),
+            ellipsis,
+        });
+
+        if (self.message) |message| {
+            try writer.print(" | error: {s}", .{message});
+        }
+        try writer.writeByte('\n');
+    }
+};
+
 pub const Scanner = struct {
     start: [*]const u8 = undefined,
     current: [*]const u8 = undefined,
     line: u32 = 1,
+    traced_eof: bool = false,
 
     pub fn init(source: [*]const u8) Scanner {
         return Scanner{
             .start = source,
             .current = source,
             .line = 1,
+            .traced_eof = false,
         };
     }
 
@@ -103,32 +143,44 @@ pub const Scanner = struct {
             '>' => if (self.match('=')) self.createToken(TokenType.TOKEN_GREATER_EQUAL) else self.createToken(TokenType.TOKEN_GREATER),
             '"' => self.string(),
             0 => self.createToken(TokenType.TOKEN_EOF),
-            else => {
-                if (comptime DEBUG_SCANNER) {
-                    std.debug.print("SCANNER  > Illegal character='{d}'\n", .{ch});
-                }
-                return self.errorToken("Illegal character.");
-            },
+            else => self.errorToken("Illegal character."),
         };
     }
 
     fn createToken(self: *Scanner, tokenType: TokenType) Token {
-        if (comptime DEBUG_SCANNER) {
-            std.debug.print("SCANNER  > Emit type='{s}' lexeme='{s}'\n", .{ @tagName(tokenType), createSlice(self.start, self.current) });
-        }
-        return Token{
+        const token = Token{
             .type = tokenType,
             .lexeme = createSlice(self.start, self.current),
             .line = self.line,
         };
+        self.traceToken(token, null);
+        return token;
     }
 
     fn errorToken(self: *Scanner, msg: []const u8) Token {
-        return Token{
+        const token = Token{
             .type = TokenType.TOKEN_ERROR,
             .lexeme = msg,
             .line = self.line,
         };
+        self.traceToken(token, msg);
+        return token;
+    }
+
+    fn traceToken(self: *Scanner, token: Token, message: ?[]const u8) void {
+        if (comptime !DEBUG_SCANNER) return;
+
+        if (token.type == TokenType.TOKEN_EOF) {
+            if (self.traced_eof) return;
+            self.traced_eof = true;
+        }
+
+        std.debug.print("{f}", .{TokenTrace{
+            .token_type = token.type,
+            .lexeme = createSlice(self.start, self.current),
+            .line = token.line,
+            .message = message,
+        }});
     }
 
     fn skipWhitespace(self: *Scanner) void {
@@ -267,6 +319,49 @@ inline fn isAlpha(ch: u8) bool {
 fn createSlice(start: [*]const u8, end: [*]const u8) []const u8 {
     const len = @intFromPtr(end) - @intFromPtr(start);
     return start[0..len];
+}
+
+test "scanner trace is compact and readable" {
+    try std.testing.expectFmt(
+        "[scanner] line    2 | STRING        | \"hello\\nworld\"\n",
+        "{f}",
+        .{TokenTrace{
+            .token_type = TokenType.TOKEN_STRING,
+            .lexeme = "\"hello\nworld\"",
+            .line = 2,
+        }},
+    );
+    try std.testing.expectFmt(
+        "[scanner] line    7 | ERROR         | \"@\" | error: Illegal character.\n",
+        "{f}",
+        .{TokenTrace{
+            .token_type = TokenType.TOKEN_ERROR,
+            .lexeme = "@",
+            .line = 7,
+            .message = "Illegal character.",
+        }},
+    );
+    try std.testing.expectFmt(
+        "[scanner] line    8 | EOF\n",
+        "{f}",
+        .{TokenTrace{
+            .token_type = TokenType.TOKEN_EOF,
+            .lexeme = "",
+            .line = 8,
+        }},
+    );
+}
+
+test "scanner trace truncates long lexemes" {
+    try std.testing.expectFmt(
+        "[scanner] line    1 | IDENTIFIER    | \"1234567890123456789012345678901234567890\"...\n",
+        "{f}",
+        .{TokenTrace{
+            .token_type = TokenType.TOKEN_IDENTIFIER,
+            .lexeme = "1234567890123456789012345678901234567890tail",
+            .line = 1,
+        }},
+    );
 }
 
 test "slice from pointers" {
