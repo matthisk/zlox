@@ -17,7 +17,7 @@ const ChunkErrors = chunk_mod.ChunkErrors;
 
 const CompilerError = error{ParseError};
 
-const Precedence = enum { NONE, ASSIGNMENT, OR, AND, EQUALITY, COMPARISON, TERM, FACTOR, UNARY, CALL, PRIMARY };
+const Precedence = enum { NONE, ASSIGNMENT, TERNARY, OR, AND, EQUALITY, COMPARISON, TERM, FACTOR, UNARY, CALL, PRIMARY };
 
 const PrefixParseFn = *const fn (self: *Compiler, canAssign: bool) (ChunkErrors || std.mem.Allocator.Error)!void;
 const InfixParseFn = *const fn (self: *Compiler) (ChunkErrors || std.mem.Allocator.Error)!void;
@@ -77,6 +77,8 @@ pub const Compiler = struct {
         compiler.rules.set(TokenType.TOKEN_GREATER_EQUAL, ParseRule{ .prefix = null, .infix = binary, .precedence = Precedence.COMPARISON });
         compiler.rules.set(TokenType.TOKEN_LESS, ParseRule{ .prefix = null, .infix = binary, .precedence = Precedence.COMPARISON });
         compiler.rules.set(TokenType.TOKEN_LESS_EQUAL, ParseRule{ .prefix = null, .infix = binary, .precedence = Precedence.COMPARISON });
+        compiler.rules.set(TokenType.TOKEN_QUESTION_MARK, ParseRule{ .prefix = null, .infix = ternary, .precedence = Precedence.TERNARY });
+        compiler.rules.set(TokenType.TOKEN_COLON, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
         compiler.rules.set(TokenType.TOKEN_IDENTIFIER, ParseRule{ .prefix = variable, .infix = null, .precedence = Precedence.NONE });
         compiler.rules.set(TokenType.TOKEN_STRING, ParseRule{ .prefix = string, .infix = null, .precedence = Precedence.NONE });
         compiler.rules.set(TokenType.TOKEN_NUMBER, ParseRule{ .prefix = number, .infix = null, .precedence = Precedence.NONE });
@@ -435,7 +437,11 @@ pub const Compiler = struct {
 
     fn string(self: *Compiler, _: bool) !void {
         const input = self.previous.lexeme[1 .. self.previous.lexeme.len - 1];
-        const value = value_mod.objValue(try value_mod.copyString(self.allocator, self.vm, input));
+        // For strings as constant value on the stack we retain a pointer into the original source.
+        // This memory is not freed by the garbage collector by marking obj.owned to false.
+        const value = try value_mod.strValue(self.allocator, input);
+        value.obj.next = self.vm.objects;
+        self.vm.objects = value.obj;
         try self.emitConstant(value);
     }
 
@@ -465,6 +471,16 @@ pub const Compiler = struct {
             TokenType.TOKEN_GREATER_EQUAL => self.emitBytes(@intFromEnum(OpCode.OP_LESS), @intFromEnum(OpCode.OP_NOT)),
             else => unreachable,
         };
+    }
+
+    fn ternary(self: *Compiler) !void {
+        try self.parsePrecedence(Precedence.ASSIGNMENT);
+
+        self.consume(TokenType.TOKEN_COLON, "Expect ':' in ternary expression.");
+
+        try self.parsePrecedence(Precedence.TERNARY);
+
+        // TODO: EMIT BYTE CODE.
     }
 
     fn and_(self: *Compiler) !void {

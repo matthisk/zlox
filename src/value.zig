@@ -14,9 +14,21 @@ pub const Obj = struct {
 
     pub fn destroy(self: *Obj, allocator: std.mem.Allocator) void {
         switch (self.data) {
-            .str => |s| allocator.free(s.chars),
+            .str => |s| if (s.owner) allocator.free(s.chars),
         }
         allocator.destroy(self);
+    }
+
+    pub fn create(allocator: std.mem.Allocator, str: []const u8) !*Obj {
+        // Alligned alloc allows us to perform a single allocation to alloc both object and string.
+        const mem = try allocator.alignedAlloc(u8, .of(Obj), @sizeOf(Obj) + str.len);
+        const obj: *Obj = @ptrCast(mem.ptr);
+        const string = mem[@sizeOf(Obj)..];
+        @memcpy(string, str);
+
+        obj.*.data = ObjData{ .str = ObjStr{ .owner = true, .chars = string } };
+
+        return obj;
     }
 };
 
@@ -25,6 +37,7 @@ pub const ObjData = union(enum) {
 };
 
 pub const ObjStr = struct {
+    owner: bool,
     chars: []const u8,
 };
 
@@ -50,7 +63,7 @@ pub inline fn strObj(chars: []const u8) ObjStr {
 
 pub inline fn strValue(allocator: std.mem.Allocator, chars: []const u8) !Value {
     const o = try allocator.create(Obj);
-    o.data = ObjData{ .str = ObjStr{ .chars = chars } };
+    o.data = ObjData{ .str = ObjStr{ .owner = false, .chars = chars } };
     return objValue(o);
 }
 
@@ -59,7 +72,7 @@ pub inline fn copyString(allocator: std.mem.Allocator, vm: *VM, chars: []const u
     if (interned != null) {
         return interned.?;
     }
-    return try allocateString(allocator, vm, try allocator.dupe(u8, chars));
+    return try allocateString(allocator, vm, chars);
 }
 
 pub inline fn takeString(allocator: std.mem.Allocator, vm: *VM, chars: []const u8) !*Obj {
@@ -73,8 +86,7 @@ pub inline fn takeString(allocator: std.mem.Allocator, vm: *VM, chars: []const u
 }
 
 pub inline fn allocateString(allocator: std.mem.Allocator, vm: *VM, chars: []const u8) !*Obj {
-    const o = try allocator.create(Obj);
-    o.data = ObjData{ .str = ObjStr{ .chars = chars } };
+    const o = try Obj.create(allocator, chars);
 
     // Memory management. Intern the string and then register the new object with the vm.
     try vm.strings.put(chars, o);

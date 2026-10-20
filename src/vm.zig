@@ -253,8 +253,15 @@ pub const VM = struct {
     }
 
     inline fn binaryOp(self: *VM, comptime op: BinaryOperator) !void {
-        if (self.checkStringOperands()) {
-            try self.concatenate();
+        if (op == BinaryOperator.PLUS) {
+            if (self.checkStringOperands()) {
+                try self.concatenate();
+            } else if (self.checkNumberOperands()) {
+                const result = value.numberValue(self.stack.pop().?.number + self.stack.pop().?.number);
+                try self.stack.append(self.allocator, result);
+            } else {
+                self.runtimeError("Operands must be string or numbers.", .{});
+            }
         } else if (self.checkNumberOperands()) {
             // Safe to expect both entries to be numbers.
             const b = self.stack.pop().?.number;
