@@ -36,6 +36,48 @@ pub const OpCode = enum(u8) {
 pub const ChunkErrors = error{OutOfConstantDataSlots};
 
 pub const Chunk = struct {
+    pub const InstructionFormatter = struct {
+        chunk: *const Chunk,
+        offset: usize,
+        show_opcode_prefix: bool,
+
+        pub fn format(self: InstructionFormatter, writer: *std.Io.Writer) std.Io.Writer.Error!void {
+            const byte = self.chunk.code.items[self.offset];
+            const op = std.enums.fromInt(OpCode, byte) orelse OpCode.ILLEGAL;
+            const tag_name = @tagName(op);
+            const name = if (!self.show_opcode_prefix and std.mem.startsWith(u8, tag_name, "OP_"))
+                tag_name["OP_".len..]
+            else
+                tag_name;
+
+            switch (op) {
+                .OP_CONSTANT => {
+                    const index = self.chunk.code.items[self.offset + 1];
+                    try writer.print("{s} [{d}] {f}", .{ name, index, value_mod.format(self.chunk.data.items[index]) });
+                },
+                .OP_CONSTANT_LONG, .OP_DEFINE_GLOBAL, .OP_GET_GLOBAL, .OP_SET_GLOBAL => {
+                    const bytes = self.chunk.code.items[self.offset + 1 ..][0..3];
+                    const index = std.mem.readInt(u24, bytes, .big);
+                    try writer.print("{s} [{d}] {f}", .{ name, index, value_mod.format(self.chunk.data.items[index]) });
+                },
+                .OP_GET_LOCAL, .OP_SET_LOCAL => {
+                    const slot = self.chunk.code.items[self.offset + 1];
+                    try writer.print("{s} slot {d}", .{ name, slot });
+                },
+                .OP_JUMP_IF_FALSE, .OP_JUMP, .OP_LOOP => {
+                    const high = self.chunk.code.items[self.offset + 1];
+                    const low = self.chunk.code.items[self.offset + 2];
+                    const distance = (@as(u16, high) << 8) | low;
+                    const next = self.offset + 3;
+                    const target = if (op == .OP_LOOP) next - distance else next + distance;
+                    try writer.print("{s} -> {d:0>4}", .{ name, target });
+                },
+                .ILLEGAL => try writer.print("ILLEGAL 0x{x:0>2}", .{byte}),
+                else => try writer.writeAll(name),
+            }
+        }
+    };
+
     allocator: std.mem.Allocator,
     code: std.ArrayList(u8) = undefined,
     data: std.ArrayList(Value) = undefined,
@@ -61,7 +103,10 @@ pub const Chunk = struct {
 
         const currentLine = self.lines.items.len;
         if (currentLine == 0) {
-            try self.lines.append(self.allocator, 0);
+            var missing_lines = l;
+            while (missing_lines > 0) : (missing_lines -= 1) {
+                try self.lines.append(self.allocator, self.code.items.len - 1);
+            }
         } else if (l > currentLine) {
             var d = l - currentLine;
 
@@ -76,16 +121,12 @@ pub const Chunk = struct {
     }
 
     pub fn getLine(self: *Chunk, i: usize) usize {
-        var prevCodeIndex: usize = 0;
-
-        for (self.lines.items, 0..) |codeIndex, lineNumber| {
-            if (i < codeIndex and i >= prevCodeIndex) {
-                return lineNumber;
-            }
-            prevCodeIndex = codeIndex;
+        var line: usize = 1;
+        for (self.lines.items, 0..) |code_index, line_index| {
+            if (code_index > i) break;
+            line = line_index + 1;
         }
-
-        return self.lines.items.len - 1;
+        return line;
     }
 
     pub fn addValue(self: *Chunk, v: Value) (std.mem.Allocator.Error || ChunkErrors)!u24 {
@@ -100,13 +141,13 @@ pub const Chunk = struct {
         return @intCast(index);
     }
 
-    pub fn findValue(self: *Chunk, v: []const u8) ?u8 {
+    pub fn findValue(self: *Chunk, v: []const u8) ?u24 {
         for (self.data.items, 0..) |value, i| {
             if (value_mod.isString(value)) {
                 const chars = value.obj.data.str.chars;
                 if (chars.ptr == v.ptr and chars.len == v.len) {
-                    // Impossible to fina a dataslot that doesn't fit a u8, as it cannot be stored.
-                    return std.math.cast(u8, i) orelse unreachable;
+                    // Impossible to fina a dataslot that doesn't fit a u24, as it cannot be stored.
+                    return std.math.cast(u24, i) orelse unreachable;
                 }
             }
         }
@@ -124,134 +165,58 @@ pub const Chunk = struct {
     }
 
     pub fn disassembleInstruction(self: *Chunk, offset: usize) usize {
-        std.debug.print("{:0>4} ", .{offset});
+        std.debug.print("{d:0>4} ", .{offset});
         if (offset > 0 and self.getLine(offset) == self.getLine(offset - 1)) {
             std.debug.print("   | ", .{});
         } else {
-            std.debug.print("{:>4} ", .{self.getLine(offset)});
+            std.debug.print("{d: >4} ", .{self.getLine(offset)});
         }
 
-        const op: OpCode = std.enums.fromInt(OpCode, self.code.items[offset]) orelse OpCode.ILLEGAL;
-        switch (op) {
-            OpCode.OP_RETURN => {
-                return self.simpleInstruction("OP_RETURN", offset);
-            },
-            OpCode.OP_FALSE => {
-                return self.simpleInstruction("OP_FALSE", offset);
-            },
-            OpCode.OP_TRUE => {
-                return self.simpleInstruction("OP_TRUE", offset);
-            },
-            OpCode.OP_NIL => {
-                return self.simpleInstruction("OP_NIL", offset);
-            },
-            OpCode.OP_NOT => {
-                return self.simpleInstruction("OP_NOT", offset);
-            },
-            OpCode.OP_CONSTANT => {
-                return self.constantInstruction("OP_CONSTANT", offset);
-            },
-            OpCode.OP_CONSTANT_LONG => {
-                return self.longConstantInstruction("OP_CONSTANT_LONG", offset);
-            },
-            OpCode.OP_NEGATE => {
-                return self.simpleInstruction("OP_NEGATE", offset);
-            },
-            OpCode.OP_ADD => {
-                return self.simpleInstruction("OP_ADD", offset);
-            },
-            OpCode.OP_MULTIPLY => {
-                return self.simpleInstruction("OP_MULTIPLY", offset);
-            },
-            OpCode.OP_SUBTRACT => {
-                return self.simpleInstruction("OP_SUBTRACT", offset);
-            },
-            OpCode.OP_DIVIDE => {
-                return self.simpleInstruction("OP_DIVIDE", offset);
-            },
-            OpCode.OP_AND => {
-                return self.simpleInstruction("OP_AND", offset);
-            },
-            OpCode.OP_OR => {
-                return self.simpleInstruction("OP_OR", offset);
-            },
-            OpCode.OP_EQUALS => {
-                return self.simpleInstruction("OP_EQUALS", offset);
-            },
-            OpCode.OP_LESS => {
-                return self.simpleInstruction("OP_LESS", offset);
-            },
-            OpCode.OP_GREATER => {
-                return self.simpleInstruction("OP_GREATER", offset);
-            },
-            OpCode.OP_DEFINE_GLOBAL => {
-                return self.longConstantInstruction("OP_DEFINE_GLOBAL", offset);
-            },
-            OpCode.OP_GET_GLOBAL => {
-                return self.longConstantInstruction("OP_GET_GLOBAL", offset);
-            },
-            OpCode.OP_SET_GLOBAL => {
-                return self.constantInstruction("OP_SET_GLOBAL", offset);
-            },
-            OpCode.OP_PRINT => {
-                return self.simpleInstruction("OP_PRINT", offset);
-            },
-            OpCode.OP_POP => {
-                return self.simpleInstruction("OP_POP", offset);
-            },
-            OpCode.OP_SET_LOCAL => {
-                return self.constantInstruction("OP_SET_LOCAL", offset);
-            },
-            OpCode.OP_GET_LOCAL => {
-                return self.constantInstruction("OP_GET_LOCAL", offset);
-            },
-            OpCode.OP_JUMP_IF_FALSE => {
-                return self.jumpInstruction("OP_JUMP_IF_FALSE", offset);
-            },
-            OpCode.OP_JUMP => {
-                return self.jumpInstruction("OP_JUMP", offset);
-            },
-            OpCode.OP_LOOP => {
-                return self.jumpInstruction("OP_LOOP", offset);
-            },
-            OpCode.ILLEGAL => {
-                return self.simpleInstruction("", offset);
-            },
-        }
+        std.debug.print("{f}\n", .{self.formatInstruction(offset, true)});
+        return offset + self.instructionLength(offset);
     }
 
-    fn simpleInstruction(_: *Chunk, comptime name: []const u8, offset: usize) usize {
-        std.debug.print(name, .{});
-        std.debug.print("\n", .{});
-        return offset + 1;
+    pub fn formatInstruction(self: *const Chunk, offset: usize, show_opcode_prefix: bool) InstructionFormatter {
+        return .{
+            .chunk = self,
+            .offset = offset,
+            .show_opcode_prefix = show_opcode_prefix,
+        };
     }
 
-    fn constantInstruction(self: *Chunk, comptime name: []const u8, offset: usize) usize {
-        const loc: u8 = self.code.items[offset + 1];
-        const v: Value = self.data.items[loc];
-        std.debug.print("{s} [{d}] ", .{ name, loc });
-        value_mod.print(v);
-        std.debug.print("\n", .{});
-        return offset + 2;
-    }
-
-    fn longConstantInstruction(self: *Chunk, comptime name: []const u8, offset: usize) usize {
-        const bs = self.code.items[offset + 1 ..][0..3];
-        const loc: u24 = std.mem.readInt(u24, bs, .big);
-        const v: Value = self.data.items[loc];
-        std.debug.print("{s} [{d}] ", .{ name, loc });
-        value_mod.print(v);
-        std.debug.print("\n", .{});
-        return offset + 4;
-    }
-
-    fn jumpInstruction(self: *Chunk, comptime name: []const u8, offset: usize) usize {
-        const high = self.code.items[offset + 1];
-        const low = self.code.items[offset + 2];
-        const jumpOffset = (@as(u16, high) << 8) | low;
-
-        std.debug.print("{s} [{d}]\n", .{ name, jumpOffset });
-
-        return offset + 3;
+    pub fn instructionLength(self: *const Chunk, offset: usize) usize {
+        const op = std.enums.fromInt(OpCode, self.code.items[offset]) orelse return 1;
+        return switch (op) {
+            .OP_CONSTANT, .OP_GET_LOCAL, .OP_SET_LOCAL => 2,
+            .OP_CONSTANT_LONG, .OP_DEFINE_GLOBAL, .OP_GET_GLOBAL, .OP_SET_GLOBAL => 4,
+            .OP_JUMP_IF_FALSE, .OP_JUMP, .OP_LOOP => 3,
+            else => 1,
+        };
     }
 };
+
+test "compressed line table resolves instruction offsets" {
+    var chunk = Chunk.init(std.testing.allocator);
+    defer chunk.deinit();
+
+    try chunk.writeChunk(0, 1);
+    try chunk.writeChunk(0, 1);
+    try chunk.writeChunk(0, 3);
+    try chunk.writeChunk(0, 5);
+
+    try std.testing.expectEqual(@as(usize, 1), chunk.getLine(0));
+    try std.testing.expectEqual(@as(usize, 1), chunk.getLine(1));
+    try std.testing.expectEqual(@as(usize, 3), chunk.getLine(2));
+    try std.testing.expectEqual(@as(usize, 5), chunk.getLine(3));
+}
+
+test "compressed line table handles leading empty lines" {
+    var chunk = Chunk.init(std.testing.allocator);
+    defer chunk.deinit();
+
+    try chunk.writeChunk(0, 3);
+    try chunk.writeChunk(0, 3);
+
+    try std.testing.expectEqual(@as(usize, 3), chunk.getLine(0));
+    try std.testing.expectEqual(@as(usize, 3), chunk.getLine(1));
+}

@@ -457,11 +457,15 @@ pub const Compiler = struct {
             setOp = OpCode.OP_SET_GLOBAL;
         }
 
-        if (canAssign and self.match(TokenType.TOKEN_EQUAL)) {
+        const op = if (canAssign and self.match(TokenType.TOKEN_EQUAL)) op: {
             try self.expression();
-            try self.emitOpWithMediumOperand(setOp, arg.?);
-        } else {
-            try self.emitOpWithMediumOperand(getOp, arg.?);
+            break :op setOp;
+        } else getOp;
+
+        switch (op) {
+            .OP_GET_LOCAL, .OP_SET_LOCAL => try self.emitOpWithByteOperand(op, @intCast(arg.?)),
+            .OP_GET_GLOBAL, .OP_SET_GLOBAL => try self.emitOpWithMediumOperand(op, arg.?),
+            else => unreachable,
         }
     }
 
@@ -667,6 +671,12 @@ pub const Compiler = struct {
         try self.emitMedium(operand);
     }
 
+    fn emitOpWithByteOperand(self: *Compiler, op: OpCode, operand: u8) !void {
+        self.traceEmit(op, operand);
+        try self.emitByte(@intFromEnum(op));
+        try self.emitByte(operand);
+    }
+
     fn emitByte(self: *Compiler, b: u8) !void {
         try self.chunk.writeChunk(b, self.previous.line);
     }
@@ -788,11 +798,11 @@ fn testCompile(source: [*]const u8) !void {
     var chunk = Chunk.init(std.testing.allocator);
     defer chunk.deinit();
 
-    var vm = VM.init(std.testing.allocator, &chunk);
+    var vm = VM.init(std.testing.io, std.testing.allocator, &chunk);
     defer vm.deinit();
 
     var scanner = Scanner.init(source);
-    var compiler = Compiler.init(std.testing.allocator, &scanner, &vm);
+    var compiler = Compiler.init(std.testing.io, std.testing.allocator, &scanner, &vm);
 
     try compiler.compile(&chunk);
 }

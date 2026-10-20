@@ -1,6 +1,8 @@
 const std = @import("std");
 const VM = @import("vm.zig").VM;
 
+const DEBUG_STRING_LIMIT = 40;
+
 pub const Value = union(enum) {
     bool: bool,
     number: f64,
@@ -126,13 +128,55 @@ pub inline fn isString(v: Value) bool {
     };
 }
 
-pub fn print(v: Value) void {
+pub const Formatter = struct {
+    value: Value,
+
+    pub fn format(self: Formatter, writer: *std.Io.Writer) std.Io.Writer.Error!void {
+        switch (self.value) {
+            .number => |number| try writer.print("{d}", .{number}),
+            .bool => |boolean| try writer.print("{}", .{boolean}),
+            .nil => try writer.writeAll("nil"),
+            .obj => |object| switch (object.data) {
+                .str => |string| {
+                    const preview_length = @min(string.chars.len, DEBUG_STRING_LIMIT);
+                    const preview = string.chars[0..preview_length];
+                    const ellipsis: []const u8 = if (preview_length < string.chars.len) "..." else "";
+                    try writer.print("\"{f}\"{s}", .{ std.zig.fmtString(preview), ellipsis });
+                },
+            },
+        }
+    }
+};
+
+pub fn format(v: Value) Formatter {
+    return .{ .value = v };
+}
+
+pub fn write(v: Value, writer: *std.Io.Writer) std.Io.Writer.Error!void {
     switch (v) {
-        .number => |n| std.debug.print("{d}", .{n}),
-        .bool => |b| std.debug.print("{}", .{b}),
-        .nil => std.debug.print("<nil>", .{}),
-        .obj => |o| switch (o.data) {
-            .str => |s| std.debug.print("\"{s}\" @ 0x{x}", .{ s.chars, @intFromPtr(o) }),
+        .number => |number| try writer.print("{d}", .{number}),
+        .bool => |boolean| try writer.print("{}", .{boolean}),
+        .nil => try writer.writeAll("nil"),
+        .obj => |object| switch (object.data) {
+            .str => |string| try writer.writeAll(string.chars),
         },
     }
+}
+
+test "debug formatter escapes and truncates strings" {
+    var short = Obj{
+        .next = null,
+        .data = .{ .str = .{ .owner = false, .chars = "hello\nworld" } },
+    };
+    try std.testing.expectFmt("\"hello\\nworld\"", "{f}", .{format(objValue(&short))});
+
+    var long = Obj{
+        .next = null,
+        .data = .{ .str = .{ .owner = false, .chars = "1234567890123456789012345678901234567890tail" } },
+    };
+    try std.testing.expectFmt(
+        "\"1234567890123456789012345678901234567890\"...",
+        "{f}",
+        .{format(objValue(&long))},
+    );
 }

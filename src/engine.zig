@@ -17,7 +17,7 @@ pub const Engine = struct {
 
     pub fn init(io: std.Io, allocator: std.mem.Allocator) Engine {
         var persistent_chunk = Chunk.init(allocator);
-        const vm = VM.init(allocator, &persistent_chunk);
+        const vm = VM.init(io, allocator, &persistent_chunk);
         return Engine{
             .io = io,
             .allocator = allocator,
@@ -56,9 +56,7 @@ pub const Engine = struct {
         self.vm.chunk = &chunk;
         self.vm.ip = chunk.code.items.ptr;
 
-        const result = try self.vm.run();
-
-        std.debug.print("RESULT {s}\n", .{@tagName(result)});
+        _ = try self.vm.run();
     }
 };
 
@@ -88,8 +86,8 @@ fn executeTestFile(allocator: std.mem.Allocator, filename: []const u8) !Interpre
 
     var chunk = Chunk.init(allocator);
     var scanner = Scanner.init(source.ptr);
-    var vm = VM.init(allocator, &chunk);
-    var compiler = Compiler.init(allocator, &scanner, &vm);
+    var vm = VM.init(std.testing.io, allocator, &chunk);
+    var compiler = Compiler.init(std.testing.io, allocator, &scanner, &vm);
     defer chunk.deinit();
     defer vm.deinit();
 
@@ -183,8 +181,8 @@ test "018 illegal assignment target" {
 
     var chunk = Chunk.init(std.testing.allocator);
     var scanner = Scanner.init(source.ptr);
-    var vm = VM.init(std.testing.allocator, &chunk);
-    var compiler = Compiler.init(std.testing.allocator, &scanner, &vm);
+    var vm = VM.init(std.testing.io, std.testing.allocator, &chunk);
+    var compiler = Compiler.init(std.testing.io, std.testing.allocator, &scanner, &vm);
     defer chunk.deinit();
     defer vm.deinit();
 
@@ -200,4 +198,9 @@ test "019 assignments" {
 test "020 local variables" {
     const result = try executeTestFile(std.testing.allocator, "020_local_variables.lox");
     try std.testing.expect(result == InterpretResult.OK);
+}
+
+test "025 runtime error" {
+    const result = try executeTestFile(std.testing.allocator, "025_runtime_error.lox");
+    try std.testing.expect(result == InterpretResult.RUNTIME_ERROR);
 }

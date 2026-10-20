@@ -16,9 +16,12 @@ const BinaryOperator = enum { PLUS, MULTIPLY, DIVIDE, SUBTRACT, LESS, GREATER };
 
 const Errors = error{RuntimeError};
 
-const DEBUG_TRACE_EXECUTION = false;
+const DEBUG_VM = true;
+const DEBUG_STACK_LIMIT = 8;
+const DEBUG_INSTRUCTION_LIMIT = 200;
 
 pub const VM = struct {
+    io: std.Io,
     allocator: std.mem.Allocator,
     chunk: *Chunk,
     stack: std.ArrayList(Value),
@@ -27,8 +30,9 @@ pub const VM = struct {
     strings: std.StringHashMap(*Obj),
     globals: std.StringHashMap(Value),
 
-    pub fn init(allocator: std.mem.Allocator, chunk: *Chunk) VM {
+    pub fn init(io: std.Io, allocator: std.mem.Allocator, chunk: *Chunk) VM {
         return VM{
+            .io = io,
             .allocator = allocator,
             .chunk = chunk,
             .stack = std.ArrayList(Value).empty,
@@ -54,31 +58,30 @@ pub const VM = struct {
     pub fn run(self: *VM) !InterpretResult {
         self.ip = self.chunk.code.items.ptr;
 
+        if (comptime DEBUG_VM) {
+            std.debug.print("== VM execution ==\n", .{});
+        }
+
+        var instruction_count: usize = 0;
         while (true) {
-            if (comptime DEBUG_TRACE_EXECUTION) {
-                _ = self.chunk.disassembleInstruction(@intFromPtr(self.ip) - @intFromPtr(self.chunk.code.items.ptr));
-                if (self.stack.items.len > 0) {
-                    std.debug.print("          ", .{});
-                    for (self.stack.items) |item| {
-                        switch (item) {
-                            .number => |n| std.debug.print("[ {d} ]", .{n}),
-                            .bool => |b| std.debug.print("[ {} ]", .{b}),
-                            .nil => std.debug.print("[ nil ]", .{}),
-                            .obj => {
-                                std.debug.print("[ ", .{});
-                                value.print(item);
-                                std.debug.print(" ]", .{});
-                            },
-                        }
-                    }
-                    std.debug.print("\n", .{});
+            const instruction_offset = @intFromPtr(self.ip) - @intFromPtr(self.chunk.code.items.ptr);
+            if (comptime DEBUG_VM) {
+                if (instruction_count < DEBUG_INSTRUCTION_LIMIT) {
+                    std.debug.print("{f}", .{ExecutionTrace{ .vm = self, .offset = instruction_offset }});
+                } else if (instruction_count == DEBUG_INSTRUCTION_LIMIT) {
+                    std.debug.print(
+                        "[vm] trace limit reached | suppressing instructions after {d}\n",
+                        .{DEBUG_INSTRUCTION_LIMIT},
+                    );
                 }
             }
+            instruction_count += 1;
 
-            const instruction: OpCode = std.enums.fromInt(OpCode, self.readByte()) orelse OpCode.ILLEGAL;
+            const instruction_byte = self.readByte();
+            const instruction: OpCode = std.enums.fromInt(OpCode, instruction_byte) orelse OpCode.ILLEGAL;
             switch (instruction) {
                 OpCode.OP_RETURN => {
-                    return InterpretResult.OK;
+                    return self.finish(InterpretResult.OK, instruction_count);
                 },
                 OpCode.OP_TRUE => {
                     try self.stack.append(self.allocator, value.boolValue(true));
@@ -107,28 +110,28 @@ pub const VM = struct {
                         },
                         else => {
                             self.runtimeError("Operand must be a number.", .{});
-                            return InterpretResult.RUNTIME_ERROR;
+                            return self.finish(InterpretResult.RUNTIME_ERROR, instruction_count);
                         },
                     }
                 },
                 OpCode.OP_ADD => {
                     self.binaryOp(BinaryOperator.PLUS) catch {
-                        return InterpretResult.RUNTIME_ERROR;
+                        return self.finish(InterpretResult.RUNTIME_ERROR, instruction_count);
                     };
                 },
                 OpCode.OP_SUBTRACT => {
                     self.binaryOp(BinaryOperator.SUBTRACT) catch {
-                        return InterpretResult.RUNTIME_ERROR;
+                        return self.finish(InterpretResult.RUNTIME_ERROR, instruction_count);
                     };
                 },
                 OpCode.OP_MULTIPLY => {
                     self.binaryOp(BinaryOperator.MULTIPLY) catch {
-                        return InterpretResult.RUNTIME_ERROR;
+                        return self.finish(InterpretResult.RUNTIME_ERROR, instruction_count);
                     };
                 },
                 OpCode.OP_DIVIDE => {
                     self.binaryOp(BinaryOperator.DIVIDE) catch {
-                        return InterpretResult.RUNTIME_ERROR;
+                        return self.finish(InterpretResult.RUNTIME_ERROR, instruction_count);
                     };
                 },
                 OpCode.OP_AND => {
@@ -148,12 +151,12 @@ pub const VM = struct {
                 },
                 OpCode.OP_LESS => {
                     self.binaryOp(BinaryOperator.LESS) catch {
-                        return InterpretResult.RUNTIME_ERROR;
+                        return self.finish(InterpretResult.RUNTIME_ERROR, instruction_count);
                     };
                 },
                 OpCode.OP_GREATER => {
                     self.binaryOp(BinaryOperator.GREATER) catch {
-                        return InterpretResult.RUNTIME_ERROR;
+                        return self.finish(InterpretResult.RUNTIME_ERROR, instruction_count);
                     };
                 },
                 OpCode.OP_POP => {
@@ -161,8 +164,7 @@ pub const VM = struct {
                 },
                 OpCode.OP_PRINT => {
                     const v = self.stack.pop().?;
-                    value.print(v);
-                    std.debug.print("\n", .{});
+                    try self.printProgramValue(v);
                 },
                 OpCode.OP_DEFINE_GLOBAL => {
                     // TODO: We globals shouldn't always require a long constant slot.
@@ -175,7 +177,7 @@ pub const VM = struct {
 
                     if (v == null) {
                         self.runtimeError("Undefined variable '{s}'", .{identfier.obj.data.str.chars});
-                        return InterpretResult.RUNTIME_ERROR;
+                        return self.finish(InterpretResult.RUNTIME_ERROR, instruction_count);
                     } else {
                         try self.stack.append(self.allocator, v.?);
                     }
@@ -187,7 +189,7 @@ pub const VM = struct {
                         try self.globals.put(name, self.peekStack(0));
                     } else {
                         self.runtimeError("Undefined variable '{s}'", .{name});
-                        return InterpretResult.RUNTIME_ERROR;
+                        return self.finish(InterpretResult.RUNTIME_ERROR, instruction_count);
                     }
                 },
                 OpCode.OP_GET_LOCAL => {
@@ -213,12 +215,11 @@ pub const VM = struct {
                     self.ip -= offset;
                 },
                 OpCode.ILLEGAL => {
-                    return InterpretResult.RUNTIME_ERROR;
+                    self.runtimeError("Unknown opcode 0x{x:0>2}.", .{instruction_byte});
+                    return self.finish(InterpretResult.RUNTIME_ERROR, instruction_count);
                 },
             }
         }
-
-        return InterpretResult.OK;
     }
 
     inline fn readByte(self: *VM) u8 {
@@ -260,7 +261,8 @@ pub const VM = struct {
                 const result = value.numberValue(self.stack.pop().?.number + self.stack.pop().?.number);
                 try self.stack.append(self.allocator, result);
             } else {
-                self.runtimeError("Operands must be string or numbers.", .{});
+                self.runtimeError("Operands must be two numbers or two strings.", .{});
+                return Errors.RuntimeError;
             }
         } else if (self.checkNumberOperands()) {
             // Safe to expect both entries to be numbers.
@@ -323,15 +325,113 @@ pub const VM = struct {
         return self.stack.items[self.stack.items.len - 1 - i];
     }
 
+    fn printProgramValue(self: *VM, v: Value) !void {
+        var buffer: [256]u8 = undefined;
+        var stdout_writer = std.Io.File.stdout().writer(self.io, &buffer);
+        const stdout = &stdout_writer.interface;
+        try value.write(v, stdout);
+        try stdout.writeByte('\n');
+        try stdout.flush();
+    }
+
+    fn finish(_: *VM, result: InterpretResult, instruction_count: usize) InterpretResult {
+        if (comptime DEBUG_VM) {
+            std.debug.print(
+                "[vm] finished | {s} | {d} instructions\n",
+                .{ @tagName(result), instruction_count },
+            );
+        }
+        return result;
+    }
+
     fn runtimeError(self: *VM, comptime msg: []const u8, args: anytype) void {
         const instruction = @intFromPtr(self.ip) - @intFromPtr(self.chunk.code.items.ptr) - 1;
-        const line = self.chunk.lines.items[instruction];
+        const line = self.chunk.getLine(instruction);
 
-        std.debug.print(msg, args);
-        std.debug.print("\n", .{});
-        std.debug.print("[line {d}] in script\n", .{line});
+        std.debug.print("[vm] runtime error | line {d} | ", .{line});
+        std.debug.print(msg ++ "\n", args);
     }
 };
+
+const ExecutionTrace = struct {
+    vm: *const VM,
+    offset: usize,
+
+    pub fn format(self: ExecutionTrace, writer: *std.Io.Writer) std.Io.Writer.Error!void {
+        const line = self.vm.chunk.getLine(self.offset);
+        var instruction_buffer: [256]u8 = undefined;
+        var instruction_writer: std.Io.Writer = .fixed(&instruction_buffer);
+        try instruction_writer.print("{f}", .{self.vm.chunk.formatInstruction(self.offset, false)});
+
+        try writer.print("[vm] {d:0>4} line {d: >4} | {s: <32} | stack [", .{
+            self.offset,
+            line,
+            instruction_writer.buffered(),
+        });
+
+        const stack = self.vm.stack.items;
+        if (stack.len <= DEBUG_STACK_LIMIT) {
+            try writeStackValues(writer, stack);
+        } else {
+            const visible_each_side = DEBUG_STACK_LIMIT / 2;
+            try writeStackValues(writer, stack[0..visible_each_side]);
+            try writer.print(", ... {d} hidden ..., ", .{stack.len - DEBUG_STACK_LIMIT});
+            try writeStackValues(writer, stack[stack.len - visible_each_side ..]);
+        }
+        try writer.writeByte(']');
+
+        if (stack.len > 0) try writer.writeAll(" <- top");
+
+        const byte = self.vm.chunk.code.items[self.offset];
+        const op = std.enums.fromInt(OpCode, byte) orelse OpCode.ILLEGAL;
+        if (op == OpCode.OP_JUMP_IF_FALSE and stack.len > 0) {
+            try writer.writeAll(if (isFalsey(stack[stack.len - 1])) " | taken" else " | not taken");
+        }
+        try writer.writeByte('\n');
+    }
+
+    fn writeStackValues(writer: *std.Io.Writer, values: []const Value) std.Io.Writer.Error!void {
+        for (values, 0..) |item, index| {
+            if (index > 0) try writer.writeAll(", ");
+            try writer.print("{f}", .{value.format(item)});
+        }
+    }
+};
+
+test "execution trace labels instruction and pre-execution stack" {
+    var chunk = Chunk.init(std.testing.allocator);
+    defer chunk.deinit();
+    try chunk.writeChunk(@intFromEnum(OpCode.OP_ADD), 4);
+
+    var vm = VM.init(std.testing.io, std.testing.allocator, &chunk);
+    defer vm.deinit();
+    try vm.stack.append(std.testing.allocator, value.numberValue(1));
+    try vm.stack.append(std.testing.allocator, value.numberValue(2));
+
+    try std.testing.expectFmt(
+        "[vm] 0000 line    4 | ADD                              | stack [1, 2] <- top\n",
+        "{f}",
+        .{ExecutionTrace{ .vm = &vm, .offset = 0 }},
+    );
+}
+
+test "execution trace shows branch destination and decision" {
+    var chunk = Chunk.init(std.testing.allocator);
+    defer chunk.deinit();
+    try chunk.writeChunk(@intFromEnum(OpCode.OP_JUMP_IF_FALSE), 3);
+    try chunk.writeChunk(0, 3);
+    try chunk.writeChunk(2, 3);
+
+    var vm = VM.init(std.testing.io, std.testing.allocator, &chunk);
+    defer vm.deinit();
+    try vm.stack.append(std.testing.allocator, value.boolValue(false));
+
+    try std.testing.expectFmt(
+        "[vm] 0000 line    3 | JUMP_IF_FALSE -> 0005            | stack [false] <- top | taken\n",
+        "{f}",
+        .{ExecutionTrace{ .vm = &vm, .offset = 0 }},
+    );
+}
 
 inline fn isTruthy(v: Value) bool {
     return switch (v) {
