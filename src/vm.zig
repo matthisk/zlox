@@ -5,6 +5,7 @@ const Chunk = chunk_mod.Chunk;
 const OpCode = chunk_mod.OpCode;
 const Value = value.Value;
 const Obj = value.Obj;
+const ObjFunction = value.ObjFunction;
 
 pub const InterpretResult = enum {
     OK,
@@ -16,6 +17,14 @@ const BinaryOperator = enum { PLUS, MULTIPLY, DIVIDE, SUBTRACT, LESS, GREATER };
 
 const Errors = error{RuntimeError};
 
+const CallFrame = struct {
+    function: *ObjFunction,
+    ip: [*]u8,
+    slots: [*]Value,
+};
+
+const FRAMES_MAX = 64;
+const STACK_MAX = FRAMES_MAX * 0xFF;
 const DEBUG_VM = true;
 const DEBUG_STACK_LIMIT = 8;
 const DEBUG_INSTRUCTION_LIMIT = 200;
@@ -23,23 +32,23 @@ const DEBUG_INSTRUCTION_LIMIT = 200;
 pub const VM = struct {
     io: std.Io,
     allocator: std.mem.Allocator,
-    chunk: *Chunk,
     stack: std.ArrayList(Value),
     objects: ?*Obj,
-    ip: [*]u8,
     strings: std.StringHashMap(*Obj),
     globals: std.StringHashMap(Value),
+    frames: [FRAMES_MAX]CallFrame = undefined,
+    frameCount: usize,
+    frame: *CallFrame = undefined,
 
-    pub fn init(io: std.Io, allocator: std.mem.Allocator, chunk: *Chunk) VM {
+    pub fn init(io: std.Io, allocator: std.mem.Allocator) VM {
         return VM{
             .io = io,
             .allocator = allocator,
-            .chunk = chunk,
             .stack = std.ArrayList(Value).empty,
             .strings = std.StringHashMap(*Obj).init(allocator),
             .globals = std.StringHashMap(Value).init(allocator),
             .objects = null,
-            .ip = chunk.code.items.ptr,
+            .frameCount = 0,
         };
     }
 
@@ -55,8 +64,21 @@ pub const VM = struct {
         }
     }
 
+    pub fn resetStack(self: *VM) void {
+        self.stack.clearRetainingCapacity();
+        self.frameCount = 0;
+    }
+
+    pub fn appendFrame(self: *VM, function: *ObjFunction) void {
+        var frame = &self.frames[self.frameCount];
+        frame.function = function;
+        frame.ip = function.chunk.code.items.ptr;
+        frame.slots = self.stack.items.ptr;
+        self.frameCount += 1;
+    }
+
     pub fn run(self: *VM) !InterpretResult {
-        self.ip = self.chunk.code.items.ptr;
+        self.frame = &self.frames[self.frameCount - 1];
 
         if (comptime DEBUG_VM) {
             std.debug.print("== VM execution ==\n", .{});
@@ -64,7 +86,7 @@ pub const VM = struct {
 
         var instruction_count: usize = 0;
         while (true) {
-            const instruction_offset = @intFromPtr(self.ip) - @intFromPtr(self.chunk.code.items.ptr);
+            const instruction_offset = @intFromPtr(self.frame.ip) - @intFromPtr(self.frame.function.chunk.code.items.ptr);
             if (comptime DEBUG_VM) {
                 if (instruction_count < DEBUG_INSTRUCTION_LIMIT) {
                     std.debug.print("{f}", .{ExecutionTrace{ .vm = self, .offset = instruction_offset }});
@@ -210,25 +232,25 @@ pub const VM = struct {
                 },
                 OpCode.OP_GET_LOCAL => {
                     const slot = self.readMedium();
-                    try self.stack.append(self.allocator, self.stack.items[slot]);
+                    try self.stack.append(self.allocator, self.frame.slots[slot]);
                 },
                 OpCode.OP_SET_LOCAL => {
                     const slot = self.readMedium();
-                    self.stack.items[slot] = self.peekStack(0);
+                    self.frame.slots[slot] = self.peekStack(0);
                 },
                 OpCode.OP_JUMP_IF_FALSE => {
                     const offset = self.readShort();
                     if (isFalsey(self.peekStack(0))) {
-                        self.ip += offset;
+                        self.frame.ip += offset;
                     }
                 },
                 OpCode.OP_JUMP => {
                     const offset = self.readShort();
-                    self.ip += offset;
+                    self.frame.ip += offset;
                 },
                 OpCode.OP_LOOP => {
                     const offset = self.readShort();
-                    self.ip -= offset;
+                    self.frame.ip -= offset;
                 },
                 OpCode.ILLEGAL => {
                     self.runtimeError("Unknown opcode 0x{x:0>2}.", .{instruction_byte});
@@ -239,34 +261,34 @@ pub const VM = struct {
     }
 
     inline fn readByte(self: *VM) u8 {
-        const b = self.ip[0];
-        self.ip += 1;
+        const b = self.frame.ip[0];
+        self.frame.ip += 1;
         return b;
     }
 
     inline fn readShort(self: *VM) u16 {
-        const high = self.ip[0];
-        const low = self.ip[1];
-        self.ip += 2;
+        const high = self.frame.ip[0];
+        const low = self.frame.ip[1];
+        self.frame.ip += 2;
         return (@as(u16, high) << 8) | low;
     }
 
     inline fn readMedium(self: *VM) u24 {
-        const high = self.ip[0];
-        const mid = self.ip[1];
-        const low = self.ip[2];
-        self.ip += 3;
+        const high = self.frame.ip[0];
+        const mid = self.frame.ip[1];
+        const low = self.frame.ip[2];
+        self.frame.ip += 3;
         return (@as(u24, high) << 16) | (@as(u24, mid) << 8) | low;
     }
 
     inline fn readConstant(self: *VM) Value {
         const pos = self.readByte();
-        return self.chunk.data.items[pos];
+        return self.frame.function.chunk.data.items[pos];
     }
 
     inline fn readLongConstant(self: *VM) Value {
         const pos = self.readMedium();
-        return self.chunk.data.items[pos];
+        return self.frame.function.chunk.data.items[pos];
     }
 
     inline fn binaryOp(self: *VM, comptime op: BinaryOperator) !void {
@@ -361,8 +383,8 @@ pub const VM = struct {
     }
 
     fn runtimeError(self: *VM, comptime msg: []const u8, args: anytype) void {
-        const instruction = @intFromPtr(self.ip) - @intFromPtr(self.chunk.code.items.ptr) - 1;
-        const line = self.chunk.getLine(instruction);
+        const instruction = @intFromPtr(self.frame.ip) - @intFromPtr(self.frame.function.chunk.code.items.ptr) - 1;
+        const line = self.frame.function.chunk.getLine(instruction);
 
         std.debug.print("[vm] runtime error | line {d} | ", .{line});
         std.debug.print(msg ++ "\n", args);
@@ -374,10 +396,10 @@ const ExecutionTrace = struct {
     offset: usize,
 
     pub fn format(self: ExecutionTrace, writer: *std.Io.Writer) std.Io.Writer.Error!void {
-        const line = self.vm.chunk.getLine(self.offset);
+        const line = self.vm.frame.function.chunk.getLine(self.offset);
         var instruction_buffer: [256]u8 = undefined;
         var instruction_writer: std.Io.Writer = .fixed(&instruction_buffer);
-        try instruction_writer.print("{f}", .{self.vm.chunk.formatInstruction(self.offset, false)});
+        try instruction_writer.print("{f}", .{self.vm.frame.function.chunk.formatInstruction(self.offset, false)});
 
         try writer.print("[vm] {d:0>4} line {d: >4} | {s: <32} | stack [", .{
             self.offset,
@@ -398,7 +420,7 @@ const ExecutionTrace = struct {
 
         if (stack.len > 0) try writer.writeAll(" <- top");
 
-        const byte = self.vm.chunk.code.items[self.offset];
+        const byte = self.vm.frame.function.chunk.code.items[self.offset];
         const op = std.enums.fromInt(OpCode, byte) orelse OpCode.ILLEGAL;
         if (op == OpCode.OP_JUMP_IF_FALSE and stack.len > 0) {
             try writer.writeAll(if (isFalsey(stack[stack.len - 1])) " | taken" else " | not taken");
@@ -415,12 +437,15 @@ const ExecutionTrace = struct {
 };
 
 test "execution trace labels instruction and pre-execution stack" {
-    var chunk = Chunk.init(std.testing.allocator);
-    defer chunk.deinit();
-    try chunk.writeChunk(@intFromEnum(OpCode.OP_ADD), 4);
+    var function = ObjFunction.create(std.testing.io);
+    defer function.destroy();
 
-    var vm = VM.init(std.testing.io, std.testing.allocator, &chunk);
+    function.chunk = Chunk.init(std.testing.allocator);
+    function.chunk.writeChunk(@intFromEnum(OpCode.OP_ADD), 4);
+
+    var vm = VM.init(std.testing.io, std.testing.allocator);
     defer vm.deinit();
+    vm.appendFrame(function);
     try vm.stack.append(std.testing.allocator, value.numberValue(1));
     try vm.stack.append(std.testing.allocator, value.numberValue(2));
 
@@ -432,14 +457,17 @@ test "execution trace labels instruction and pre-execution stack" {
 }
 
 test "execution trace shows branch destination and decision" {
-    var chunk = Chunk.init(std.testing.allocator);
-    defer chunk.deinit();
-    try chunk.writeChunk(@intFromEnum(OpCode.OP_JUMP_IF_FALSE), 3);
-    try chunk.writeChunk(0, 3);
-    try chunk.writeChunk(2, 3);
+    var function = ObjFunction.create(std.testing.allocator);
+    defer function.destroy();
 
-    var vm = VM.init(std.testing.io, std.testing.allocator, &chunk);
+    function.chunk = Chunk.init(std.testing.allocator);
+    function.chunk.writeChunk(@intFromEnum(OpCode.OP_JUMP_IF_FALSE), 3);
+    function.chunk.writeChunk(0, 3);
+    function.chunk.writeChunk(2, 3);
+
+    var vm = VM.init(std.testing.io, std.testing.allocator);
     defer vm.deinit();
+    vm.appendFrame(function);
     try vm.stack.append(std.testing.allocator, value.boolValue(false));
 
     try std.testing.expectFmt(

@@ -10,6 +10,7 @@ const TokenType = scanner_mod.TokenType;
 const Token = scanner_mod.Token;
 const Value = value_mod.Value;
 const numberValue = value_mod.numberValue;
+const ObjFunction = value_mod.ObjFunction;
 
 const Chunk = chunk_mod.Chunk;
 const OpCode = chunk_mod.OpCode;
@@ -35,6 +36,8 @@ const ParseTrace = struct {
 };
 
 const ParseTraceKind = enum { prefix, infix };
+
+const FunctionType = enum { FUNCTION, SCRIPT };
 
 const EmitTrace = struct {
     op: OpCode,
@@ -102,13 +105,25 @@ pub const Compiler = struct {
     hadError: bool = false,
     chunk: *Chunk = undefined,
     rules: ParseRules = undefined,
+    function: *ObjFunction = undefined,
+    type: FunctionType = undefined,
     locals: std.ArrayList(Local) = undefined,
     scopeDepth: usize = 0,
+    loopStartStack: std.ArrayList(usize) = undefined,
 
-    pub fn init(io: std.Io, allocator: std.mem.Allocator, scanner: *Scanner, vm: *VM) Compiler {
+    pub fn init(io: std.Io, allocator: std.mem.Allocator, scanner: *Scanner, vm: *VM) !Compiler {
         var compiler = Compiler{ .io = io, .allocator = allocator, .scanner = scanner, .vm = vm };
 
+        compiler.type = FunctionType.SCRIPT;
+        compiler.function = try ObjFunction.create(allocator);
+
         compiler.locals = std.ArrayList(Local).empty;
+        // The first slot in the locals stack is reserved for the VM.
+        try compiler.locals.append(allocator, Local{
+            .name = "",
+            .depth = 0,
+        });
+        compiler.loopStartStack = std.ArrayList(usize).empty;
 
         compiler.rules = ParseRules.initUndefined();
 
@@ -155,15 +170,14 @@ pub const Compiler = struct {
         compiler.rules.set(TokenType.TOKEN_SWITCH, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
         compiler.rules.set(TokenType.TOKEN_CASE, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
         compiler.rules.set(TokenType.TOKEN_DEFAULT, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
+        compiler.rules.set(TokenType.TOKEN_CONTINUE, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
         compiler.rules.set(TokenType.TOKEN_ERROR, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
         compiler.rules.set(TokenType.TOKEN_EOF, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
 
         return compiler;
     }
 
-    pub fn compile(self: *Compiler, chunk: *Chunk) !void {
-        self.chunk = chunk;
-
+    pub fn compile(self: *Compiler) !*ObjFunction {
         self.advance();
 
         while (!self.match(TokenType.TOKEN_EOF)) {
@@ -176,9 +190,11 @@ pub const Compiler = struct {
             return CompilerError.ParseError;
         } else if (comptime DEBUG_COMPILER) {
             std.debug.print("\n", .{});
-            self.chunk.disassemble("compiled bytecode");
+            self.currentChunk().disassemble(if (self.function.name.chars.len > 0) self.function.name.chars else "<script>");
             std.debug.print("\n", .{});
         }
+
+        return self.function;
     }
 
     fn declaration(self: *Compiler) anyerror!void {
@@ -204,9 +220,20 @@ pub const Compiler = struct {
             try self.forStatement();
         } else if (self.match(TokenType.TOKEN_SWITCH)) {
             try self.switchStatement();
+        } else if (self.match(TokenType.TOKEN_CONTINUE)) {
+            try self.continueStatement();
         } else {
             try self.expressionStatement();
         }
+    }
+
+    fn continueStatement(self: *Compiler) !void {
+        if (self.loopStartStack.items.len == 0) {
+            self.errorAtCurrent("Continue cannot be used outside of loop.");
+        } else {
+            try self.emitLoop(self.loopStartStack.getLast());
+        }
+        self.consume(TokenType.TOKEN_SEMICOLON, "Expect ';' after value.");
     }
 
     fn beginScope(self: *Compiler) void {
@@ -251,7 +278,10 @@ pub const Compiler = struct {
             try self.expressionStatement();
         }
 
-        var loopStart = self.chunk.code.items.len;
+        var loopStart = self.currentChunk().code.items.len;
+        try self.loopStartStack.append(self.allocator, loopStart);
+        defer _ = self.loopStartStack.pop();
+
         var exitJump: ?usize = null;
         if (!self.match(TokenType.TOKEN_SEMICOLON)) {
             try self.expression();
@@ -263,7 +293,7 @@ pub const Compiler = struct {
 
         if (!self.match(TokenType.TOKEN_RIGHT_PAREN)) {
             const bodyJump = try self.emitJump(OpCode.OP_JUMP);
-            const incrementStart = self.chunk.code.items.len;
+            const incrementStart = self.currentChunk().code.items.len;
 
             try self.expression();
             try self.emitOp(OpCode.OP_POP);
@@ -286,7 +316,8 @@ pub const Compiler = struct {
     }
 
     fn whileStatement(self: *Compiler) !void {
-        const loopStart = self.chunk.code.items.len;
+        const loopStart = self.currentChunk().code.items.len;
+        try self.loopStartStack.append(self.allocator, loopStart);
 
         self.consume(TokenType.TOKEN_LEFT_PAREN, "Expect '(' after while.");
         try self.expression();
@@ -300,6 +331,8 @@ pub const Compiler = struct {
 
         try self.patchJump(exitJump);
         try self.emitOp(OpCode.OP_POP);
+
+        _ = self.loopStartStack.pop();
     }
 
     fn ifStatement(self: *Compiler) !void {
@@ -433,7 +466,7 @@ pub const Compiler = struct {
 
     fn identifierConstant(self: *Compiler) !u24 {
         const obj = try value_mod.copyString(self.allocator, self.vm, self.previous.lexeme);
-        const constant = self.chunk.findValue(obj.data.str.chars);
+        const constant = self.currentChunk().findValue(obj.data.str.chars);
         if (constant != null) {
             return constant.?;
         }
@@ -709,7 +742,7 @@ pub const Compiler = struct {
     fn emitLoop(self: *Compiler, loopStart: usize) !void {
         try self.emitOp(OpCode.OP_LOOP);
 
-        const offset = self.chunk.code.items.len - loopStart + 2;
+        const offset = self.currentChunk().code.items.len - loopStart + 2;
         if (offset > UINT16_MAX) self.errorAtCurrent("Loop body too large.");
 
         try self.emitByte(@intCast((offset >> 8) & 0xFF));
@@ -720,20 +753,20 @@ pub const Compiler = struct {
         try self.emitOp(op);
         try self.emitByte(0xff);
         try self.emitByte(0xff);
-        return self.chunk.code.items.len - 2;
+        return self.currentChunk().code.items.len - 2;
     }
 
     fn patchJump(self: *Compiler, offset: usize) !void {
         // -2 to adjust for the bytecode for the jump offset itself.
         // (this offset is already handled by the VM)
-        const jump = self.chunk.code.items.len - offset - 2;
+        const jump = self.currentChunk().code.items.len - offset - 2;
 
         if (jump > UINT16_MAX) {
             self.errorAtCurrent("Too much code to jump over.");
         }
 
-        self.chunk.code.items[offset] = @intCast((jump >> 8) & 0xFF);
-        self.chunk.code.items[offset + 1] = @intCast(jump & 0xFF);
+        self.currentChunk().code.items[offset] = @intCast((jump >> 8) & 0xFF);
+        self.currentChunk().code.items[offset + 1] = @intCast(jump & 0xFF);
     }
 
     fn emitOp(self: *Compiler, op: OpCode) !void {
@@ -754,11 +787,11 @@ pub const Compiler = struct {
     }
 
     fn emitByte(self: *Compiler, b: u8) !void {
-        try self.chunk.writeChunk(b, self.previous.line);
+        try self.currentChunk().writeChunk(b, self.previous.line);
     }
 
     fn makeConstant(self: *Compiler, v: Value) !u24 {
-        return self.chunk.addValue(v);
+        return self.currentChunk().addValue(v);
     }
 
     fn traceParse(_: *Compiler, kind: ParseTraceKind, token: Token, precedence: Precedence) void {
@@ -803,6 +836,10 @@ pub const Compiler = struct {
 
         std.debug.print(": {s}\n", .{msg});
         self.hadError = true;
+    }
+
+    fn currentChunk(self: *Compiler) *Chunk {
+        return &self.function.chunk;
     }
 };
 
@@ -871,14 +908,11 @@ test "compiler strings" {
 }
 
 fn testCompile(source: [*]const u8) !void {
-    var chunk = Chunk.init(std.testing.allocator);
-    defer chunk.deinit();
-
-    var vm = VM.init(std.testing.io, std.testing.allocator, &chunk);
+    var vm = VM.init(std.testing.io, std.testing.allocator);
     defer vm.deinit();
 
     var scanner = Scanner.init(source);
-    var compiler = Compiler.init(std.testing.io, std.testing.allocator, &scanner, &vm);
+    var compiler = try Compiler.init(std.testing.io, std.testing.allocator, &scanner, &vm);
 
-    try compiler.compile(&chunk);
+    try compiler.compile();
 }

@@ -51,6 +51,7 @@ pub const TokenType = enum {
     TOKEN_SWITCH,
     TOKEN_CASE,
     TOKEN_DEFAULT,
+    TOKEN_CONTINUE,
 
     TOKEN_ERROR,
     TOKEN_EOF,
@@ -233,6 +234,7 @@ pub const Scanner = struct {
                     return switch (self.start[1]) {
                         'a' => return self.checkKeyword(1, 3, "ase", TokenType.TOKEN_CASE),
                         'l' => return self.checkKeyword(1, 4, "lass", TokenType.TOKEN_CLASS),
+                        'o' => return self.checkKeyword(1, 7, "ontinue", TokenType.TOKEN_CONTINUE),
                         else => return TokenType.TOKEN_IDENTIFIER,
                     };
                 }

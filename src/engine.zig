@@ -13,32 +13,25 @@ pub const Engine = struct {
     io: std.Io,
     allocator: std.mem.Allocator,
     vm: VM,
-    persistent_chunk: Chunk,
 
     pub fn init(io: std.Io, allocator: std.mem.Allocator) Engine {
-        var persistent_chunk = Chunk.init(allocator);
-        const vm = VM.init(io, allocator, &persistent_chunk);
+        const vm = VM.init(io, allocator);
         return Engine{
             .io = io,
             .allocator = allocator,
             .vm = vm,
-            .persistent_chunk = persistent_chunk,
         };
     }
 
     pub fn deinit(self: *Engine) void {
         self.vm.deinit();
-        self.persistent_chunk.deinit();
     }
 
     pub fn execute(self: *Engine, source: []const u8) !void {
-        var chunk = Chunk.init(self.allocator);
-        defer chunk.deinit();
-
         var scanner = Scanner.init(source.ptr);
-        var compiler = Compiler.init(self.io, self.allocator, &scanner, &self.vm);
+        var compiler = try Compiler.init(self.io, self.allocator, &scanner, &self.vm);
 
-        compiler.compile(&chunk) catch |err| switch (err) {
+        const function = compiler.compile() catch |err| switch (err) {
             std.mem.Allocator.Error.OutOfMemory => {
                 std.debug.print("Not enough memory.", .{});
                 return;
@@ -53,8 +46,7 @@ pub const Engine = struct {
             },
         };
 
-        self.vm.chunk = &chunk;
-        self.vm.ip = chunk.code.items.ptr;
+        self.vm.appendFrame(function);
 
         _ = try self.vm.run();
     }

@@ -1,5 +1,6 @@
 const std = @import("std");
 const VM = @import("vm.zig").VM;
+const Chunk = @import("chunk.zig").Chunk;
 
 const DEBUG_STRING_LIMIT = 40;
 
@@ -10,6 +11,26 @@ pub const Value = union(enum) {
     obj: *Obj,
 };
 
+pub const ObjFunction = struct {
+    obj: Obj,
+    arity: usize,
+    chunk: Chunk,
+    name: ObjStr,
+
+    pub fn create(allocator: std.mem.Allocator) !*ObjFunction {
+        var objFn = try allocator.create(ObjFunction);
+        objFn.arity = 0;
+        objFn.name = ObjStr{ .owner = true, .chars = "" };
+        objFn.chunk = Chunk.init(allocator);
+        return objFn;
+    }
+
+    pub fn destroy(self: *ObjFunction, allocator: std.mem.Allocator) void {
+        self.chunk.deinit();
+        allocator.destroy(self);
+    }
+};
+
 pub const Obj = struct {
     next: ?*Obj,
     data: ObjData,
@@ -17,6 +38,10 @@ pub const Obj = struct {
     pub fn destroy(self: *Obj, allocator: std.mem.Allocator) void {
         switch (self.data) {
             .str => |s| if (s.owner) allocator.free(s.chars),
+            .function => |f| {
+                f.chunk.deinit();
+                allocator.destroy(f);
+            },
         }
         allocator.destroy(self);
     }
@@ -36,6 +61,7 @@ pub const Obj = struct {
 
 pub const ObjData = union(enum) {
     str: ObjStr,
+    function: *ObjFunction,
 };
 
 pub const ObjStr = struct {
@@ -123,6 +149,17 @@ pub inline fn isString(v: Value) bool {
     return switch (v) {
         .obj => |o| switch (o.data) {
             .str => true,
+            else => false,
+        },
+        else => false,
+    };
+}
+
+pub inline fn isFunction(v: Value) bool {
+    return switch (v) {
+        .obj => |o| switch (o.data) {
+            .function => true,
+            else => false,
         },
         else => false,
     };
@@ -143,6 +180,13 @@ pub const Formatter = struct {
                     const ellipsis: []const u8 = if (preview_length < string.chars.len) "..." else "";
                     try writer.print("\"{f}\"{s}", .{ std.zig.fmtString(preview), ellipsis });
                 },
+                .function => |f| {
+                    if (f.name.chars.len > 0) {
+                        try writer.print("<fn {s}>", .{f.name.chars});
+                    } else {
+                        try writer.print("<script>", .{});
+                    }
+                },
             },
         }
     }
@@ -159,6 +203,7 @@ pub fn write(v: Value, writer: *std.Io.Writer) std.Io.Writer.Error!void {
         .nil => try writer.writeAll("nil"),
         .obj => |object| switch (object.data) {
             .str => |string| try writer.writeAll(string.chars),
+            .function => |f| try writer.writeAll(f.name.chars),
         },
     }
 }
