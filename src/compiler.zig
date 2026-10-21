@@ -140,7 +140,7 @@ pub const Compiler = struct {
 
         compiler.rules = ParseRules.initUndefined();
 
-        compiler.rules.set(TokenType.TOKEN_LEFT_PAREN, ParseRule{ .prefix = grouping, .infix = null, .precedence = Precedence.NONE });
+        compiler.rules.set(TokenType.TOKEN_LEFT_PAREN, ParseRule{ .prefix = grouping, .infix = call, .precedence = Precedence.ASSIGNMENT });
         compiler.rules.set(TokenType.TOKEN_RIGHT_PAREN, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
         compiler.rules.set(TokenType.TOKEN_LEFT_BRACE, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
         compiler.rules.set(TokenType.TOKEN_RIGHT_BRACE, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
@@ -233,7 +233,8 @@ pub const Compiler = struct {
         inner.previous = self.previous;
         defer inner.deinit();
 
-        try inner.fun();
+        const value = try inner.fun();
+        try self.emitOpWithMediumOperand(OpCode.OP_CONSTANT_LONG, try self.makeConstant(value));
 
         try self.defineVariable(global);
 
@@ -241,7 +242,7 @@ pub const Compiler = struct {
         self.previous = inner.previous;
     }
 
-    fn fun(self: *Compiler) !void {
+    fn fun(self: *Compiler) !Value {
         self.beginScope();
 
         self.consume(TokenType.TOKEN_LEFT_PAREN, "Expect '(' after function name.");
@@ -271,7 +272,7 @@ pub const Compiler = struct {
         obj.data = ObjData{ .function = self.function };
         obj.next = self.vm.objects;
         self.vm.objects = obj;
-        try self.enclosing.emitOpWithMediumOperand(OpCode.OP_CONSTANT_LONG, try self.makeConstant(value_mod.objValue(obj)));
+        return value_mod.objValue(obj);
     }
 
     fn statement(self: *Compiler) anyerror!void {
@@ -662,6 +663,28 @@ pub const Compiler = struct {
     fn grouping(self: *Compiler, _: bool) !void {
         try self.expression();
         self.consume(TokenType.TOKEN_RIGHT_PAREN, "Expect ')' after expression.");
+    }
+
+    fn call(self: *Compiler) !void {
+        const argCount = try self.argumentList();
+        try self.emitOpWithByteOperand(OpCode.OP_CALL, argCount);
+    }
+
+    fn argumentList(self: *Compiler) !u8 {
+        var argCount: u8 = 0;
+        if (!self.check(TokenType.TOKEN_RIGHT_PAREN)) {
+            while (true) {
+                try self.expression();
+                if (argCount == 255) {
+                    self.errorAtCurrent("Can't have more than 255 arguments.");
+                }
+                argCount += 1;
+                if (!self.match(TokenType.TOKEN_COMMA)) break;
+            }
+        }
+
+        self.consume(TokenType.TOKEN_RIGHT_PAREN, "Expect ')' after argument list.");
+        return argCount;
     }
 
     fn binary(self: *Compiler) !void {

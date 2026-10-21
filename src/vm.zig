@@ -204,6 +204,13 @@ pub const VM = struct {
                     const v = self.stack.pop().?;
                     try self.printProgramValue(v);
                 },
+                OpCode.OP_CALL => {
+                    const argCount = self.readByte();
+                    if (!try self.callValue(self.peekStack(argCount), argCount)) {
+                        return InterpretResult.RUNTIME_ERROR;
+                    }
+                    self.frame = &self.frames[self.frameCount - 1];
+                },
                 OpCode.OP_DEFINE_GLOBAL => {
                     // TODO: We globals shouldn't always require a long constant slot.
                     const identifier = self.readLongConstant();
@@ -351,6 +358,33 @@ pub const VM = struct {
         };
     }
 
+    inline fn callValue(self: *VM, callee: Value, argCount: u8) !bool {
+        if (value.isFunction(callee)) {
+            if (argCount != callee.obj.data.function.arity) {
+                self.runtimeError("Expected {d} arguments but got {d}", .{ callee.obj.data.function.arity, argCount });
+                return false;
+            }
+            return try self.call(callee.obj.data.function, argCount);
+        }
+
+        self.runtimeError("Can only call functions.", .{});
+        return false;
+    }
+
+    fn call(self: *VM, func: *ObjFunction, argCount: u8) !bool {
+        if (self.frameCount == FRAMES_MAX) {
+            self.runtimeError("Stack overflow", .{});
+            return false;
+        }
+
+        var frame = &self.frames[self.frameCount];
+        self.frameCount += 1;
+        frame.function = func;
+        frame.ip = func.chunk.code.items.ptr;
+        frame.slots = self.stack.items.ptr - argCount - 1;
+        return true;
+    }
+
     fn checkStringOperands(self: *VM) bool {
         return value.isString(self.peekStack(0)) and value.isString(self.peekStack(1));
     }
@@ -388,6 +422,17 @@ pub const VM = struct {
 
         std.debug.print("[vm] runtime error | line {d} | ", .{line});
         std.debug.print(msg ++ "\n", args);
+
+        for (1..self.frameCount + 1) |incIndex| {
+            const i = self.frameCount - incIndex;
+            const frame = &self.frames[i];
+            const func = frame.function;
+            const index = @intFromPtr(frame.ip) - @intFromPtr(func.chunk.code.items.ptr) - 1;
+            std.debug.print("[vm] runtime error | line {d} | ", .{func.chunk.getLine(index)});
+            std.debug.print("{s}()\n", .{func.name.chars});
+        }
+
+        self.resetStack();
     }
 };
 

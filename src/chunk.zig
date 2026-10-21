@@ -21,6 +21,7 @@ pub const OpCode = enum(u8) {
     OP_LESS,
     OP_GREATER,
     OP_PRINT,
+    OP_CALL,
     OP_POP,
     OP_POPN,
     OP_POPN_LONG,
@@ -54,7 +55,7 @@ pub const Chunk = struct {
                 tag_name;
 
             switch (op) {
-                .OP_POPN => {
+                .OP_POPN, .OP_CALL => {
                     const n = self.chunk.code.items[self.offset + 1];
                     try writer.print("{s} [{d}]", .{ name, n });
                 },
