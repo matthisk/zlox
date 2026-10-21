@@ -229,9 +229,16 @@ pub const Compiler = struct {
         const global = try self.parseVariable("Expect function name.");
 
         var inner = try Compiler.init(self.io, self.allocator, self.scanner, self.vm, self, FunctionType.FUNCTION);
+        inner.current = self.current;
+        inner.previous = self.previous;
+        defer inner.deinit();
+
         try inner.fun();
 
         try self.defineVariable(global);
+
+        self.current = inner.current;
+        self.previous = inner.previous;
     }
 
     fn fun(self: *Compiler) !void {
@@ -253,7 +260,7 @@ pub const Compiler = struct {
             }
         }
 
-        self.consume(TokenType.TOKEN_LEFT_PAREN, "Expect ')' after parameters.");
+        self.consume(TokenType.TOKEN_RIGHT_PAREN, "Expect ')' after parameters.");
         self.consume(TokenType.TOKEN_LEFT_BRACE, "Expect '{' before function body.");
         try self.block();
 
@@ -321,7 +328,7 @@ pub const Compiler = struct {
     }
 
     fn block(self: *Compiler) !void {
-        while (!self.check(TokenType.TOKEN_RIGHT_BRACE)) {
+        while (!self.check(TokenType.TOKEN_RIGHT_BRACE) and !self.check(TokenType.TOKEN_EOF)) {
             try self.declaration();
         }
 
