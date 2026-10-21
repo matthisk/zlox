@@ -15,12 +15,11 @@ pub const ObjFunction = struct {
     obj: Obj,
     arity: usize,
     chunk: Chunk,
-    name: ObjStr,
+    name: *ObjStr = undefined,
 
     pub fn create(allocator: std.mem.Allocator) !*ObjFunction {
         var objFn = try allocator.create(ObjFunction);
         objFn.arity = 0;
-        objFn.name = ObjStr{ .owner = true, .chars = "" };
         objFn.chunk = Chunk.init(allocator);
         return objFn;
     }
@@ -46,6 +45,7 @@ pub const Obj = struct {
         allocator.destroy(self);
     }
 
+    // TODO: This creates a string object, this methods name is confusing.
     pub fn create(allocator: std.mem.Allocator, str: []const u8) !*Obj {
         // Alligned alloc allows us to perform a single allocation to alloc both object and string.
         const mem = try allocator.alignedAlloc(u8, .of(Obj), @sizeOf(Obj) + str.len);
@@ -67,6 +67,20 @@ pub const ObjData = union(enum) {
 pub const ObjStr = struct {
     owner: bool,
     chars: []const u8,
+
+    pub fn create(allocator: std.mem.Allocator, str: []const u8) !*ObjStr {
+        const mem = try allocator.alignedAlloc(u8, .of(ObjStr), @sizeOf(ObjStr) + str.len);
+        const obj: *ObjStr = @ptrCast(mem.ptr);
+        const string = mem[@sizeOf(ObjStr)..];
+        @memcpy(string, str);
+
+        obj.* = .{
+            .owner = true,
+            .chars = string,
+        };
+
+        return obj;
+    }
 };
 
 pub inline fn boolValue(b: bool) Value {

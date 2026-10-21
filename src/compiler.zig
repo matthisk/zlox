@@ -10,7 +10,10 @@ const TokenType = scanner_mod.TokenType;
 const Token = scanner_mod.Token;
 const Value = value_mod.Value;
 const numberValue = value_mod.numberValue;
+const Obj = value_mod.Obj;
+const ObjData = value_mod.ObjData;
 const ObjFunction = value_mod.ObjFunction;
+const ObjStr = value_mod.ObjStr;
 
 const Chunk = chunk_mod.Chunk;
 const OpCode = chunk_mod.OpCode;
@@ -37,7 +40,7 @@ const ParseTrace = struct {
 
 const ParseTraceKind = enum { prefix, infix };
 
-const FunctionType = enum { FUNCTION, SCRIPT };
+pub const FunctionType = enum { FUNCTION, SCRIPT };
 
 const EmitTrace = struct {
     op: OpCode,
@@ -110,12 +113,22 @@ pub const Compiler = struct {
     locals: std.ArrayList(Local) = undefined,
     scopeDepth: usize = 0,
     loopStartStack: std.ArrayList(usize) = undefined,
+    enclosing: *Compiler = undefined,
 
-    pub fn init(io: std.Io, allocator: std.mem.Allocator, scanner: *Scanner, vm: *VM) !Compiler {
+    pub fn init(io: std.Io, allocator: std.mem.Allocator, scanner: *Scanner, vm: *VM, enclosing: ?*Compiler, fnType: FunctionType) !Compiler {
         var compiler = Compiler{ .io = io, .allocator = allocator, .scanner = scanner, .vm = vm };
 
-        compiler.type = FunctionType.SCRIPT;
+        compiler.type = fnType;
         compiler.function = try ObjFunction.create(allocator);
+        if (enclosing != null) {
+            compiler.enclosing = enclosing.?;
+        }
+
+        if (fnType != FunctionType.SCRIPT and enclosing != null) {
+            compiler.function.name = try ObjStr.create(allocator, enclosing.?.previous.lexeme);
+        } else {
+            compiler.function.name = try ObjStr.create(allocator, "<script>");
+        }
 
         compiler.locals = std.ArrayList(Local).empty;
         // The first slot in the locals stack is reserved for the VM.
@@ -177,6 +190,11 @@ pub const Compiler = struct {
         return compiler;
     }
 
+    pub fn deinit(self: *Compiler) void {
+        self.locals.deinit(self.allocator);
+        self.loopStartStack.deinit(self.allocator);
+    }
+
     pub fn compile(self: *Compiler) !*ObjFunction {
         self.advance();
 
@@ -190,7 +208,7 @@ pub const Compiler = struct {
             return CompilerError.ParseError;
         } else if (comptime DEBUG_COMPILER) {
             std.debug.print("\n", .{});
-            self.currentChunk().disassemble(if (self.function.name.chars.len > 0) self.function.name.chars else "<script>");
+            self.currentChunk().disassemble(self.function.name.chars);
             std.debug.print("\n", .{});
         }
 
@@ -198,11 +216,55 @@ pub const Compiler = struct {
     }
 
     fn declaration(self: *Compiler) anyerror!void {
-        if (self.match(TokenType.TOKEN_VAR)) {
+        if (self.match(TokenType.TOKEN_FUN)) {
+            try self.funDeclaration();
+        } else if (self.match(TokenType.TOKEN_VAR)) {
             try self.varDecl();
         } else {
             try self.statement();
         }
+    }
+
+    fn funDeclaration(self: *Compiler) !void {
+        const global = try self.parseVariable("Expect function name.");
+
+        var inner = try Compiler.init(self.io, self.allocator, self.scanner, self.vm, self, FunctionType.FUNCTION);
+        try inner.fun();
+
+        try self.defineVariable(global);
+    }
+
+    fn fun(self: *Compiler) !void {
+        self.beginScope();
+
+        self.consume(TokenType.TOKEN_LEFT_PAREN, "Expect '(' after function name.");
+        if (!self.check(TokenType.TOKEN_RIGHT_PAREN)) {
+            while (true) {
+                self.function.arity += 1;
+                if (self.function.arity > 0xFF) {
+                    self.errorAtCurrent("Can't have more than 255 parameters");
+                }
+                const constant = try self.parseVariable("Expect parameter name.");
+                try self.defineVariable(constant);
+
+                if (!self.match(TokenType.TOKEN_COMMA)) {
+                    break;
+                }
+            }
+        }
+
+        self.consume(TokenType.TOKEN_LEFT_PAREN, "Expect ')' after parameters.");
+        self.consume(TokenType.TOKEN_LEFT_BRACE, "Expect '{' before function body.");
+        try self.block();
+
+        try self.end();
+
+        // TODO: Figure out who frees this and when.
+        var obj = try self.allocator.create(Obj);
+        obj.data = ObjData{ .function = self.function };
+        obj.next = self.vm.objects;
+        self.vm.objects = obj;
+        try self.emitOpWithMediumOperand(OpCode.OP_CONSTANT, try self.makeConstant(value_mod.objValue(obj)));
     }
 
     fn statement(self: *Compiler) anyerror!void {
@@ -912,7 +974,7 @@ fn testCompile(source: [*]const u8) !void {
     defer vm.deinit();
 
     var scanner = Scanner.init(source);
-    var compiler = try Compiler.init(std.testing.io, std.testing.allocator, &scanner, &vm);
+    var compiler = try Compiler.init(std.testing.io, std.testing.allocator, &scanner, &vm, null, FunctionType.SCRIPT);
 
     try compiler.compile();
 }

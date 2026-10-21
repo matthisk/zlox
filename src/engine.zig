@@ -8,6 +8,7 @@ const Chunk = chunk_mod.Chunk;
 const Scanner = scanner_mod.Scanner;
 const Compiler = compiler_mod.Compiler;
 const VM = vm_mod.VM;
+const FunctionType = compiler_mod.FunctionType;
 
 pub const Engine = struct {
     io: std.Io,
@@ -29,7 +30,7 @@ pub const Engine = struct {
 
     pub fn execute(self: *Engine, source: []const u8) !void {
         var scanner = Scanner.init(source.ptr);
-        var compiler = try Compiler.init(self.io, self.allocator, &scanner, &self.vm);
+        var compiler = try Compiler.init(self.io, self.allocator, &scanner, &self.vm, null, FunctionType.SCRIPT);
 
         const function = compiler.compile() catch |err| switch (err) {
             std.mem.Allocator.Error.OutOfMemory => {
@@ -79,7 +80,7 @@ fn executeTestFile(allocator: std.mem.Allocator, filename: []const u8) !Interpre
     var chunk = Chunk.init(allocator);
     var scanner = Scanner.init(source.ptr);
     var vm = VM.init(std.testing.io, allocator, &chunk);
-    var compiler = Compiler.init(std.testing.io, allocator, &scanner, &vm);
+    var compiler = Compiler.init(std.testing.io, allocator, &scanner, &vm, null, FunctionType.SCRIPT);
     defer chunk.deinit();
     defer vm.deinit();
 
@@ -174,7 +175,7 @@ test "018 illegal assignment target" {
     var chunk = Chunk.init(std.testing.allocator);
     var scanner = Scanner.init(source.ptr);
     var vm = VM.init(std.testing.io, std.testing.allocator, &chunk);
-    var compiler = Compiler.init(std.testing.io, std.testing.allocator, &scanner, &vm);
+    var compiler = Compiler.init(std.testing.io, std.testing.allocator, &scanner, &vm, null, FunctionType.SCRIPT);
     defer chunk.deinit();
     defer vm.deinit();
 
