@@ -271,7 +271,7 @@ pub const Compiler = struct {
         obj.data = ObjData{ .function = self.function };
         obj.next = self.vm.objects;
         self.vm.objects = obj;
-        try self.emitOpWithMediumOperand(OpCode.OP_CONSTANT, try self.makeConstant(value_mod.objValue(obj)));
+        try self.enclosing.emitOpWithMediumOperand(OpCode.OP_CONSTANT_LONG, try self.makeConstant(value_mod.objValue(obj)));
     }
 
     fn statement(self: *Compiler) anyerror!void {
