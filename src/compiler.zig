@@ -265,7 +265,7 @@ pub const Compiler = struct {
         self.consume(TokenType.TOKEN_LEFT_BRACE, "Expect '{' before function body.");
         try self.block();
 
-        try self.end();
+        try self.emitReturn();
 
         // TODO: Figure out who frees this and when.
         var obj = try self.allocator.create(Obj);
@@ -292,6 +292,8 @@ pub const Compiler = struct {
             try self.switchStatement();
         } else if (self.match(TokenType.TOKEN_CONTINUE)) {
             try self.continueStatement();
+        } else if (self.match(TokenType.TOKEN_RETURN)) {
+            try self.returnStatement();
         } else {
             try self.expressionStatement();
         }
@@ -304,6 +306,19 @@ pub const Compiler = struct {
             try self.emitLoop(self.loopStartStack.getLast());
         }
         self.consume(TokenType.TOKEN_SEMICOLON, "Expect ';' after value.");
+    }
+
+    fn returnStatement(self: *Compiler) !void {
+        if (self.type == FunctionType.SCRIPT) {
+            self.errorAtCurrent("Can't return from top-level code.");
+        }
+        if (self.match(TokenType.TOKEN_SEMICOLON)) {
+            try self.emitReturn();
+        } else {
+            try self.expression();
+            self.consume(TokenType.TOKEN_SEMICOLON, "Expect ';' after value.");
+            try self.emitOp(OpCode.OP_RETURN);
+        }
     }
 
     fn beginScope(self: *Compiler) void {
@@ -795,6 +810,13 @@ pub const Compiler = struct {
     }
 
     fn end(self: *Compiler) !void {
+        try self.emitOp(OpCode.OP_NIL);
+        try self.emitOp(OpCode.OP_RETURN);
+    }
+
+    fn emitReturn(self: *Compiler) !void {
+        // We emit nil because that is the implicit return value in case this function doesn't return anything.
+        try self.emitOp(OpCode.OP_NIL);
         try self.emitOp(OpCode.OP_RETURN);
     }
 

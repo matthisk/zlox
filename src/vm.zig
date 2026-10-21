@@ -20,7 +20,7 @@ const Errors = error{RuntimeError};
 const CallFrame = struct {
     function: *ObjFunction,
     ip: [*]u8,
-    slots: [*]Value,
+    slots: usize,
 };
 
 const FRAMES_MAX = 64;
@@ -73,12 +73,19 @@ pub const VM = struct {
         var frame = &self.frames[self.frameCount];
         frame.function = function;
         frame.ip = function.chunk.code.items.ptr;
-        frame.slots = self.stack.items.ptr;
+        frame.slots = self.stack.items.len;
         self.frameCount += 1;
     }
 
     pub fn run(self: *VM) !InterpretResult {
         self.frame = &self.frames[self.frameCount - 1];
+
+        // Push <script> to the top of the stack.
+        var obj = try self.allocator.create(Obj);
+        obj.data = value.ObjData{ .function = self.frame.function };
+        obj.next = self.objects;
+        self.objects = obj;
+        try self.stack.append(self.allocator, value.objValue(obj));
 
         if (comptime DEBUG_VM) {
             std.debug.print("== VM execution ==\n", .{});
@@ -103,7 +110,16 @@ pub const VM = struct {
             const instruction: OpCode = std.enums.fromInt(OpCode, instruction_byte) orelse OpCode.ILLEGAL;
             switch (instruction) {
                 OpCode.OP_RETURN => {
-                    return self.finish(InterpretResult.OK, instruction_count);
+                    const result = self.stack.pop().?;
+                    self.frameCount -= 1;
+                    if (self.frameCount == 0) {
+                        _ = self.stack.pop().?;
+                        return InterpretResult.OK;
+                    }
+
+                    self.stack.shrinkRetainingCapacity(self.frame.slots);
+                    try self.stack.append(self.allocator, result);
+                    self.frame = &self.frames[self.frameCount - 1];
                 },
                 OpCode.OP_TRUE => {
                     try self.stack.append(self.allocator, value.boolValue(true));
@@ -239,11 +255,11 @@ pub const VM = struct {
                 },
                 OpCode.OP_GET_LOCAL => {
                     const slot = self.readMedium();
-                    try self.stack.append(self.allocator, self.frame.slots[slot]);
+                    try self.stack.append(self.allocator, self.stack.items[self.frame.slots + slot]);
                 },
                 OpCode.OP_SET_LOCAL => {
                     const slot = self.readMedium();
-                    self.frame.slots[slot] = self.peekStack(0);
+                    self.stack.items[self.frame.slots + slot] = self.peekStack(0);
                 },
                 OpCode.OP_JUMP_IF_FALSE => {
                     const offset = self.readShort();
@@ -381,7 +397,7 @@ pub const VM = struct {
         self.frameCount += 1;
         frame.function = func;
         frame.ip = func.chunk.code.items.ptr;
-        frame.slots = self.stack.items.ptr - argCount - 1;
+        frame.slots = self.stack.items.len - argCount - 1;
         return true;
     }
 
