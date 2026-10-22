@@ -3,7 +3,7 @@ fun hanoi(n, from, to, aux) {
 
     hanoi(n - 1, from, aux, to);
 
-    print "Move disk " + n + " from " + from + " to " + to;
+    print "Move disk from " + from + " to " + to;
 
     hanoi(n - 1, aux, to, from);
 }
