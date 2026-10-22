@@ -1,4 +1,5 @@
 const std = @import("std");
+const config = @import("config");
 const scanner_mod = @import("scanner.zig");
 const chunk_mod = @import("chunk.zig");
 const value_mod = @import("value.zig");
@@ -94,7 +95,7 @@ const Local = struct {
 
 const UINT8_COUNT = std.math.maxInt(u8) + 1;
 const UINT16_MAX = std.math.maxInt(u16);
-const DEBUG_COMPILER = true;
+const DEBUG_COMPILER = config.debug_compiler;
 
 pub const Compiler = struct {
     io: std.Io,

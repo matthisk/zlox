@@ -15,6 +15,11 @@ pub fn build(b: *std.Build) void {
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
 
+    const options = b.addOptions();
+    options.addOption(bool, "debug_scanner", b.option(bool, "debug-scanner", "Enable scanner debug output") orelse false);
+    options.addOption(bool, "debug_compiler", b.option(bool, "debug-compiler", "Enable compiler debug output") orelse false);
+    options.addOption(bool, "debug_vm", b.option(bool, "debug-vm", "Enable VM debug output") orelse false);
+
     // We will also create a module for our other entry point, 'main.zig'.
     const exe_mod = b.createModule(.{
         // `root_source_file` is the Zig "entry point" of the module. If a module
@@ -25,6 +30,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    exe_mod.addOptions("config", options);
 
     // This creates another `std.Build.Step.Compile`, but this one builds an executable
     // rather than a static library.

@@ -1,6 +1,7 @@
 const std = @import("std");
+const config = @import("config");
 
-const DEBUG_SCANNER = true;
+const DEBUG_SCANNER = config.debug_scanner;
 const DEBUG_LEXEME_LIMIT = 40;
 
 pub const TokenType = enum {

@@ -1,4 +1,5 @@
 const std = @import("std");
+const config = @import("config");
 const chunk_mod = @import("chunk.zig");
 const Heap = @import("heap.zig").Heap;
 const value = @import("value.zig");
@@ -26,7 +27,7 @@ const CallFrame = struct {
 
 const FRAMES_MAX = 64;
 const STACK_MAX = FRAMES_MAX * 0xFF;
-const DEBUG_VM = true;
+const DEBUG_VM = config.debug_vm;
 const DEBUG_STACK_LIMIT = 8;
 const DEBUG_INSTRUCTION_LIMIT = 200;
 
