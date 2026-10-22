@@ -41,8 +41,8 @@ pub const VM = struct {
     frameCount: usize,
     frame: *CallFrame = undefined,
 
-    pub fn init(io: std.Io, allocator: std.mem.Allocator) VM {
-        return VM{
+    pub fn init(io: std.Io, allocator: std.mem.Allocator) !VM {
+        var vm = VM{
             .io = io,
             .allocator = allocator,
             .stack = std.ArrayList(Value).empty,
@@ -50,6 +50,10 @@ pub const VM = struct {
             .globals = std.StringHashMap(Value).init(allocator),
             .frameCount = 0,
         };
+
+        try vm.defineNative("clock", clockNative);
+
+        return vm;
     }
 
     pub fn deinit(self: *VM) void {
@@ -374,6 +378,14 @@ pub const VM = struct {
             }
             return try self.call(callee.obj.data.function, argCount);
         }
+        if (value.isNative(callee)) {
+            const native = value.asNative(callee);
+            const firstArgumentOnStackOffset = self.stack.items.len - argCount;
+            const result = try native.function(self.io, argCount, self.stack.items[firstArgumentOnStackOffset..]);
+            self.stack.shrinkRetainingCapacity(firstArgumentOnStackOffset);
+            try self.stack.append(self.allocator, result);
+            return true;
+        }
 
         self.runtimeError("Can only call functions.", .{});
         return false;
@@ -391,6 +403,14 @@ pub const VM = struct {
         frame.ip = func.chunk.code.items.ptr;
         frame.slots = self.stack.items.len - argCount - 1;
         return true;
+    }
+
+    fn defineNative(self: *VM, name: []const u8, native: value.NativeFn) !void {
+        try self.stack.append(self.allocator, value.objValue(try self.heap.copyString(name)));
+        try self.stack.append(self.allocator, value.objValue(try self.heap.createNative(native)));
+        try self.globals.put(value.asStr(self.stack.items[0]), self.stack.items[1]);
+        _ = self.stack.pop();
+        _ = self.stack.pop();
     }
 
     fn checkStringOperands(self: *VM) bool {
@@ -443,6 +463,10 @@ pub const VM = struct {
         self.resetStack();
     }
 };
+
+pub fn clockNative(io: std.Io, _: usize, _: []const Value) !Value {
+    return value.numberValue(@floatFromInt(std.Io.Timestamp.now(io, .real).toMilliseconds()));
+}
 
 const ExecutionTrace = struct {
     vm: *const VM,

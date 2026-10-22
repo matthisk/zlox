@@ -15,8 +15,8 @@ pub const Engine = struct {
     allocator: std.mem.Allocator,
     vm: VM,
 
-    pub fn init(io: std.Io, allocator: std.mem.Allocator) Engine {
-        const vm = VM.init(io, allocator);
+    pub fn init(io: std.Io, allocator: std.mem.Allocator) !Engine {
+        const vm = try VM.init(io, allocator);
         return Engine{
             .io = io,
             .allocator = allocator,

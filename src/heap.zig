@@ -4,6 +4,7 @@ const value_mod = @import("value.zig");
 const Obj = value_mod.Obj;
 const ObjData = value_mod.ObjData;
 const ObjFunction = value_mod.ObjFunction;
+const ObjNative = value_mod.ObjNative;
 const ObjStr = value_mod.ObjStr;
 
 /// Owns heap allocated runtime objects and their linked list.
@@ -49,6 +50,14 @@ pub const Heap = struct {
         function.name = name;
 
         return try self.createObject(.{ .function = function });
+    }
+
+    pub fn createNative(self: *Heap, fun: value_mod.NativeFn) !*Obj {
+        const native = try self.allocator.create(ObjNative);
+        errdefer self.allocator.destroy(native);
+        native.function = fun;
+
+        return try self.createObject(.{ .native = native });
     }
 
     /// Return an interned string, copying `chars` into heap-owned storage when

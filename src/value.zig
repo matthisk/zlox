@@ -4,6 +4,8 @@ const Chunk = @import("chunk.zig").Chunk;
 
 const DEBUG_STRING_LIMIT = 40;
 
+pub const NativeFn = *const fn (io: std.Io, argCount: usize, args: []const Value) anyerror!Value;
+
 pub const Value = union(enum) {
     bool: bool,
     number: f64,
@@ -30,6 +32,12 @@ pub const ObjFunction = struct {
     }
 };
 
+pub const ObjNative = struct {
+    obj: Obj,
+    arity: usize,
+    function: NativeFn,
+};
+
 pub const Obj = struct {
     next: ?*Obj,
     data: ObjData,
@@ -41,6 +49,9 @@ pub const Obj = struct {
                 f.chunk.deinit();
                 allocator.destroy(f);
             },
+            .native => |n| {
+                allocator.destroy(n);
+            },
         }
         allocator.destroy(self);
     }
@@ -49,6 +60,7 @@ pub const Obj = struct {
 pub const ObjData = union(enum) {
     str: ObjStr,
     function: *ObjFunction,
+    native: *ObjNative,
 };
 
 pub const ObjStr = struct {
@@ -107,10 +119,32 @@ pub inline fn isString(v: Value) bool {
     };
 }
 
+pub inline fn asFunction(v: Value) *ObjFunction {
+    return v.obj.data.function;
+}
+
+pub inline fn asNative(v: Value) *ObjNative {
+    return v.obj.data.native;
+}
+
+pub inline fn asStr(v: Value) []const u8 {
+    return v.obj.data.str.chars;
+}
+
 pub inline fn isFunction(v: Value) bool {
     return switch (v) {
         .obj => |o| switch (o.data) {
             .function => true,
+            else => false,
+        },
+        else => false,
+    };
+}
+
+pub inline fn isNative(v: Value) bool {
+    return switch (v) {
+        .obj => |o| switch (o.data) {
+            .native => true,
             else => false,
         },
         else => false,
@@ -133,11 +167,14 @@ pub const Formatter = struct {
                     try writer.print("\"{f}\"{s}", .{ std.zig.fmtString(preview), ellipsis });
                 },
                 .function => |f| {
-                    if (f.name.chars.len > 0) {
-                        try writer.print("<fn {s}>", .{f.name.chars});
-                    } else {
+                    if (std.mem.eql(u8, f.name.chars, "<script>")) {
                         try writer.print("<script>", .{});
+                    } else {
+                        try writer.print("<fn {s}>", .{f.name.chars});
                     }
+                },
+                .native => {
+                    try writer.print("<native>", .{});
                 },
             },
         }
@@ -156,6 +193,7 @@ pub fn write(v: Value, writer: *std.Io.Writer) std.Io.Writer.Error!void {
         .obj => |object| switch (object.data) {
             .str => |string| try writer.writeAll(string.chars),
             .function => |f| try writer.writeAll(f.name.chars),
+            .native => try writer.writeAll("<native_fn>"),
         },
     }
 }
