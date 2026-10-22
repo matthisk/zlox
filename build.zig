@@ -78,4 +78,14 @@ pub fn build(b: *std.Build) void {
     // running the unit tests.
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_exe_unit_tests.step);
+
+    // A `check` step for ZLS build-on-save diagnostics. These artifacts are not
+    // installed, so Zig skips emitting binaries and only runs semantic analysis.
+    const exe_check = b.addExecutable(.{
+        .name = "zlox",
+        .root_module = exe_mod,
+    });
+
+    const check_step = b.step("check", "Check if zlox compiles");
+    check_step.dependOn(&exe_check.step);
 }
