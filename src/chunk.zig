@@ -200,8 +200,8 @@ pub const Chunk = struct {
     pub fn instructionLength(self: *const Chunk, offset: usize) usize {
         const op = std.enums.fromInt(OpCode, self.code.items[offset]) orelse return 1;
         return switch (op) {
-            .OP_CONSTANT, .OP_GET_LOCAL, .OP_SET_LOCAL, .OP_CALL => 2,
-            .OP_CONSTANT_LONG, .OP_DEFINE_GLOBAL, .OP_GET_GLOBAL, .OP_SET_GLOBAL => 4,
+            .OP_CONSTANT, .OP_CALL => 2,
+            .OP_CONSTANT_LONG, .OP_DEFINE_GLOBAL, .OP_GET_LOCAL, .OP_SET_LOCAL, .OP_GET_GLOBAL, .OP_SET_GLOBAL => 4,
             .OP_JUMP_IF_FALSE, .OP_JUMP, .OP_LOOP => 3,
             else => 1,
         };
