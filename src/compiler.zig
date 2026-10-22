@@ -208,8 +208,16 @@ pub const Compiler = struct {
         if (self.hadError) {
             return CompilerError.ParseError;
         } else if (comptime DEBUG_COMPILER) {
-            std.debug.print("\n", .{});
-            self.currentChunk().disassemble(self.currentFunction().name.chars);
+            var currentObj = self.vm.heap.objects;
+            while (currentObj != null) {
+                const value = value_mod.objValue(currentObj.?);
+                if (value_mod.isFunction(value)) {
+                    const func = currentObj.?.data.function;
+                    std.debug.print("\n", .{});
+                    func.chunk.disassemble(func.name.chars);
+                }
+                currentObj = currentObj.?.next;
+            }
             std.debug.print("\n", .{});
         }
 
