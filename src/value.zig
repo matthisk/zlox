@@ -4,7 +4,7 @@ const Chunk = @import("chunk.zig").Chunk;
 
 const DEBUG_STRING_LIMIT = 40;
 
-pub const NativeFn = *const fn (io: std.Io, argCount: usize, args: []const Value) anyerror!Value;
+pub const NativeFn = *const fn (vm: *VM, argCount: usize, args: []const Value) anyerror!Value;
 
 pub const Value = union(enum) {
     bool: bool,
@@ -14,7 +14,6 @@ pub const Value = union(enum) {
 };
 
 pub const ObjFunction = struct {
-    obj: Obj,
     arity: usize,
     chunk: Chunk,
     name: *ObjStr = undefined,
@@ -33,7 +32,6 @@ pub const ObjFunction = struct {
 };
 
 pub const ObjNative = struct {
-    obj: Obj,
     arity: usize,
     function: NativeFn,
 };
@@ -85,7 +83,7 @@ pub inline fn objValue(o: *Obj) Value {
 }
 
 pub inline fn strObj(chars: []const u8) ObjStr {
-    return ObjStr{ .chars = chars };
+    return ObjStr{ .owner = true, .chars = chars };
 }
 
 pub inline fn isNumber(v: Value) bool {

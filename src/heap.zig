@@ -48,14 +48,16 @@ pub const Heap = struct {
         const function = try ObjFunction.create(self.allocator);
         errdefer function.destroy(self.allocator);
         function.name = name;
+        function.arity = 0;
 
         return try self.createObject(.{ .function = function });
     }
 
-    pub fn createNative(self: *Heap, fun: value_mod.NativeFn) !*Obj {
+    pub fn createNative(self: *Heap, arity: u8, fun: value_mod.NativeFn) !*Obj {
         const native = try self.allocator.create(ObjNative);
         errdefer self.allocator.destroy(native);
         native.function = fun;
+        native.arity = arity;
 
         return try self.createObject(.{ .native = native });
     }

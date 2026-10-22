@@ -124,8 +124,8 @@ pub const Compiler = struct {
             compiler.previous = enclosing.?.previous;
         }
 
-        const name = if (fnType != FunctionType.SCRIPT and enclosing != null)
-            enclosing.?.previous.lexeme
+        const name = if (fnType != FunctionType.SCRIPT)
+            compiler.previous.lexeme
         else
             "<script>";
         const nameObject = try vm.heap.copyString(name);

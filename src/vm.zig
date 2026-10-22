@@ -51,7 +51,11 @@ pub const VM = struct {
             .frameCount = 0,
         };
 
-        try vm.defineNative("clock", clockNative);
+        try vm.defineNative("clock", 0, clockNative);
+        try vm.defineNative("random", 0, randomNative);
+        try vm.defineNative("sqrt", 1, sqrtNative);
+        try vm.defineNative("str", 1, strNative);
+        try vm.defineNative("readLine", 0, readLineNative);
 
         return vm;
     }
@@ -380,9 +384,13 @@ pub const VM = struct {
         }
         if (value.isNative(callee)) {
             const native = value.asNative(callee);
+            if (argCount != native.arity) {
+                self.runtimeError("Expected {d} arguments but got {d}", .{ native.arity, argCount });
+                return false;
+            }
             const firstArgumentOnStackOffset = self.stack.items.len - argCount;
-            const result = try native.function(self.io, argCount, self.stack.items[firstArgumentOnStackOffset..]);
-            self.stack.shrinkRetainingCapacity(firstArgumentOnStackOffset);
+            const result = try native.function(self, argCount, self.stack.items[firstArgumentOnStackOffset..]);
+            self.stack.shrinkRetainingCapacity(firstArgumentOnStackOffset - 1);
             try self.stack.append(self.allocator, result);
             return true;
         }
@@ -405,9 +413,9 @@ pub const VM = struct {
         return true;
     }
 
-    fn defineNative(self: *VM, name: []const u8, native: value.NativeFn) !void {
+    fn defineNative(self: *VM, name: []const u8, arity: u8, native: value.NativeFn) !void {
         try self.stack.append(self.allocator, value.objValue(try self.heap.copyString(name)));
-        try self.stack.append(self.allocator, value.objValue(try self.heap.createNative(native)));
+        try self.stack.append(self.allocator, value.objValue(try self.heap.createNative(arity, native)));
         try self.globals.put(value.asStr(self.stack.items[0]), self.stack.items[1]);
         _ = self.stack.pop();
         _ = self.stack.pop();
@@ -464,8 +472,48 @@ pub const VM = struct {
     }
 };
 
-pub fn clockNative(io: std.Io, _: usize, _: []const Value) !Value {
-    return value.numberValue(@floatFromInt(std.Io.Timestamp.now(io, .real).toMilliseconds()));
+pub fn readLineNative(vm: *VM, _: usize, _: []const Value) !Value {
+    return value.objValue(try vm.heap.copyString("hello world"));
+}
+
+pub fn strNative(vm: *VM, argCount: usize, args: []const Value) !Value {
+    if (argCount != 1) {
+        return Errors.RuntimeError;
+    }
+    const v = args[0];
+    const str = switch (v) {
+        .bool => |b| try vm.heap.copyString(if (b) "true" else "false"),
+        .number => |n| try vm.heap.takeString(try std.fmt.allocPrint(vm.allocator, "{d}", .{n})),
+        .nil => try vm.heap.copyString("nil"),
+        .obj => |o| switch (o.data) {
+            .str => o,
+            .function => try vm.heap.copyString("function"),
+            .native => try vm.heap.copyString("native"),
+        },
+    };
+
+    return value.objValue(str);
+}
+
+pub fn sqrtNative(_: *VM, argCount: usize, args: []const Value) !Value {
+    if (argCount != 1) {
+        return Errors.RuntimeError;
+    }
+    if (!value.isNumber(args[0])) {
+        return Errors.RuntimeError;
+    }
+    return value.numberValue(std.math.sqrt(args[0].number));
+}
+
+pub fn clockNative(vm: *VM, _: usize, _: []const Value) !Value {
+    return value.numberValue(@floatFromInt(std.Io.Timestamp.now(vm.io, .real).toMilliseconds()));
+}
+
+var prng = std.Random.DefaultPrng.init(12345);
+const random = prng.random();
+
+pub fn randomNative(_: *VM, _: usize, _: []const Value) !Value {
+    return value.numberValue(random.float(f64));
 }
 
 const ExecutionTrace = struct {
