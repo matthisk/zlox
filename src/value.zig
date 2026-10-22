@@ -44,19 +44,6 @@ pub const Obj = struct {
         }
         allocator.destroy(self);
     }
-
-    // TODO: This creates a string object, this methods name is confusing.
-    pub fn create(allocator: std.mem.Allocator, str: []const u8) !*Obj {
-        // Alligned alloc allows us to perform a single allocation to alloc both object and string.
-        const mem = try allocator.alignedAlloc(u8, .of(Obj), @sizeOf(Obj) + str.len);
-        const obj: *Obj = @ptrCast(mem.ptr);
-        const string = mem[@sizeOf(Obj)..];
-        @memcpy(string, str);
-
-        obj.*.data = ObjData{ .str = ObjStr{ .owner = true, .chars = string } };
-
-        return obj;
-    }
 };
 
 pub const ObjData = union(enum) {
@@ -67,20 +54,6 @@ pub const ObjData = union(enum) {
 pub const ObjStr = struct {
     owner: bool,
     chars: []const u8,
-
-    pub fn create(allocator: std.mem.Allocator, str: []const u8) !*ObjStr {
-        const mem = try allocator.alignedAlloc(u8, .of(ObjStr), @sizeOf(ObjStr) + str.len);
-        const obj: *ObjStr = @ptrCast(mem.ptr);
-        const string = mem[@sizeOf(ObjStr)..];
-        @memcpy(string, str);
-
-        obj.* = .{
-            .owner = true,
-            .chars = string,
-        };
-
-        return obj;
-    }
 };
 
 pub inline fn boolValue(b: bool) Value {
@@ -101,41 +74,6 @@ pub inline fn objValue(o: *Obj) Value {
 
 pub inline fn strObj(chars: []const u8) ObjStr {
     return ObjStr{ .chars = chars };
-}
-
-pub inline fn strValue(allocator: std.mem.Allocator, chars: []const u8) !Value {
-    const o = try allocator.create(Obj);
-    o.data = ObjData{ .str = ObjStr{ .owner = false, .chars = chars } };
-    return objValue(o);
-}
-
-pub inline fn copyString(allocator: std.mem.Allocator, vm: *VM, chars: []const u8) !*Obj {
-    const interned = vm.strings.get(chars);
-    if (interned != null) {
-        return interned.?;
-    }
-    return try allocateString(allocator, vm, chars);
-}
-
-pub inline fn takeString(allocator: std.mem.Allocator, vm: *VM, chars: []const u8) !*Obj {
-    const interned = vm.strings.get(chars);
-    if (interned != null) {
-        // Since we are taking ownership of the string, we need to free the duplicate string.
-        allocator.free(chars);
-        return interned.?;
-    }
-    return try allocateString(allocator, vm, chars);
-}
-
-pub inline fn allocateString(allocator: std.mem.Allocator, vm: *VM, chars: []const u8) !*Obj {
-    const o = try Obj.create(allocator, chars);
-
-    // Memory management. Intern the string and then register the new object with the vm.
-    try vm.strings.put(chars, o);
-    o.next = vm.objects;
-    vm.objects = o;
-
-    return o;
 }
 
 pub inline fn isNumber(v: Value) bool {

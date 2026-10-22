@@ -31,8 +31,9 @@ pub const Engine = struct {
     pub fn execute(self: *Engine, source: []const u8) !void {
         var scanner = Scanner.init(source.ptr);
         var compiler = try Compiler.init(self.io, self.allocator, &scanner, &self.vm, null, FunctionType.SCRIPT);
+        defer compiler.deinit();
 
-        const function = compiler.compile() catch |err| switch (err) {
+        const functionObject = compiler.compile() catch |err| switch (err) {
             std.mem.Allocator.Error.OutOfMemory => {
                 std.debug.print("Not enough memory.", .{});
                 return;
@@ -47,7 +48,7 @@ pub const Engine = struct {
             },
         };
 
-        self.vm.appendFrame(function);
+        if (!try self.vm.startScript(functionObject)) return;
 
         _ = try self.vm.run();
     }
@@ -67,8 +68,9 @@ fn loadTestFile(allocator: std.mem.Allocator, filename: []const u8) ![]u8 {
     defer file.close();
 
     const file_size = try file.getEndPos();
-    const source = try allocator.alloc(u8, file_size);
-    _ = try file.readAll(source);
+    const source = try allocator.alloc(u8, file_size + 1);
+    _ = try file.readAll(source[0..file_size]);
+    source[file_size] = 0;
 
     return source;
 }

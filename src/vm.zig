@@ -1,5 +1,6 @@
 const std = @import("std");
 const chunk_mod = @import("chunk.zig");
+const Heap = @import("heap.zig").Heap;
 const value = @import("value.zig");
 const Chunk = chunk_mod.Chunk;
 const OpCode = chunk_mod.OpCode;
@@ -33,8 +34,7 @@ pub const VM = struct {
     io: std.Io,
     allocator: std.mem.Allocator,
     stack: std.ArrayList(Value),
-    objects: ?*Obj,
-    strings: std.StringHashMap(*Obj),
+    heap: Heap,
     globals: std.StringHashMap(Value),
     frames: [FRAMES_MAX]CallFrame = undefined,
     frameCount: usize,
@@ -45,23 +45,16 @@ pub const VM = struct {
             .io = io,
             .allocator = allocator,
             .stack = std.ArrayList(Value).empty,
-            .strings = std.StringHashMap(*Obj).init(allocator),
+            .heap = Heap.init(allocator),
             .globals = std.StringHashMap(Value).init(allocator),
-            .objects = null,
             .frameCount = 0,
         };
     }
 
     pub fn deinit(self: *VM) void {
         self.stack.deinit(self.allocator);
-        self.strings.deinit();
         self.globals.deinit();
-        var object = self.objects;
-        while (object != null) {
-            const next = object.?.next;
-            object.?.destroy(self.allocator);
-            object = next;
-        }
+        self.heap.deinit();
     }
 
     pub fn resetStack(self: *VM) void {
@@ -77,15 +70,13 @@ pub const VM = struct {
         self.frameCount += 1;
     }
 
+    pub fn startScript(self: *VM, functionObject: *Obj) !bool {
+        try self.stack.append(self.allocator, value.objValue(functionObject));
+        return self.call(functionObject.data.function, 0);
+    }
+
     pub fn run(self: *VM) !InterpretResult {
         self.frame = &self.frames[self.frameCount - 1];
-
-        // Push <script> to the top of the stack.
-        var obj = try self.allocator.create(Obj);
-        obj.data = value.ObjData{ .function = self.frame.function };
-        obj.next = self.objects;
-        self.objects = obj;
-        try self.stack.append(self.allocator, value.objValue(obj));
 
         if (comptime DEBUG_VM) {
             std.debug.print("== VM execution ==\n", .{});
@@ -350,7 +341,7 @@ pub const VM = struct {
         const a = self.stack.pop().?.obj.data.str.chars;
 
         const chars = try std.mem.concat(self.allocator, u8, &[_][]const u8{ a, b });
-        const v = value.objValue(try value.takeString(self.allocator, self, chars));
+        const v = value.objValue(try self.heap.takeString(chars));
 
         try self.stack.append(self.allocator, v);
     }
@@ -498,15 +489,15 @@ const ExecutionTrace = struct {
 };
 
 test "execution trace labels instruction and pre-execution stack" {
-    var function = ObjFunction.create(std.testing.io);
-    defer function.destroy();
+    const function = try ObjFunction.create(std.testing.allocator);
+    defer function.destroy(std.testing.allocator);
 
-    function.chunk = Chunk.init(std.testing.allocator);
-    function.chunk.writeChunk(@intFromEnum(OpCode.OP_ADD), 4);
+    try function.chunk.writeChunk(@intFromEnum(OpCode.OP_ADD), 4);
 
     var vm = VM.init(std.testing.io, std.testing.allocator);
     defer vm.deinit();
     vm.appendFrame(function);
+    vm.frame = &vm.frames[vm.frameCount - 1];
     try vm.stack.append(std.testing.allocator, value.numberValue(1));
     try vm.stack.append(std.testing.allocator, value.numberValue(2));
 
@@ -518,17 +509,17 @@ test "execution trace labels instruction and pre-execution stack" {
 }
 
 test "execution trace shows branch destination and decision" {
-    var function = ObjFunction.create(std.testing.allocator);
-    defer function.destroy();
+    const function = try ObjFunction.create(std.testing.allocator);
+    defer function.destroy(std.testing.allocator);
 
-    function.chunk = Chunk.init(std.testing.allocator);
-    function.chunk.writeChunk(@intFromEnum(OpCode.OP_JUMP_IF_FALSE), 3);
-    function.chunk.writeChunk(0, 3);
-    function.chunk.writeChunk(2, 3);
+    try function.chunk.writeChunk(@intFromEnum(OpCode.OP_JUMP_IF_FALSE), 3);
+    try function.chunk.writeChunk(0, 3);
+    try function.chunk.writeChunk(2, 3);
 
     var vm = VM.init(std.testing.io, std.testing.allocator);
     defer vm.deinit();
     vm.appendFrame(function);
+    vm.frame = &vm.frames[vm.frameCount - 1];
     try vm.stack.append(std.testing.allocator, value.boolValue(false));
 
     try std.testing.expectFmt(

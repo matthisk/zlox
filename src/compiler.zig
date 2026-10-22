@@ -11,9 +11,7 @@ const Token = scanner_mod.Token;
 const Value = value_mod.Value;
 const numberValue = value_mod.numberValue;
 const Obj = value_mod.Obj;
-const ObjData = value_mod.ObjData;
 const ObjFunction = value_mod.ObjFunction;
-const ObjStr = value_mod.ObjStr;
 
 const Chunk = chunk_mod.Chunk;
 const OpCode = chunk_mod.OpCode;
@@ -108,7 +106,7 @@ pub const Compiler = struct {
     hadError: bool = false,
     chunk: *Chunk = undefined,
     rules: ParseRules = undefined,
-    function: *ObjFunction = undefined,
+    functionObject: *Obj = undefined,
     type: FunctionType = undefined,
     locals: std.ArrayList(Local) = undefined,
     scopeDepth: usize = 0,
@@ -119,16 +117,18 @@ pub const Compiler = struct {
         var compiler = Compiler{ .io = io, .allocator = allocator, .scanner = scanner, .vm = vm };
 
         compiler.type = fnType;
-        compiler.function = try ObjFunction.create(allocator);
         if (enclosing != null) {
             compiler.enclosing = enclosing.?;
+            compiler.current = enclosing.?.current;
+            compiler.previous = enclosing.?.previous;
         }
 
-        if (fnType != FunctionType.SCRIPT and enclosing != null) {
-            compiler.function.name = try ObjStr.create(allocator, enclosing.?.previous.lexeme);
-        } else {
-            compiler.function.name = try ObjStr.create(allocator, "<script>");
-        }
+        const name = if (fnType != FunctionType.SCRIPT and enclosing != null)
+            enclosing.?.previous.lexeme
+        else
+            "<script>";
+        const nameObject = try vm.heap.copyString(name);
+        compiler.functionObject = try vm.heap.createFunction(&nameObject.data.str);
 
         compiler.locals = std.ArrayList(Local).empty;
         // The first slot in the locals stack is reserved for the VM.
@@ -195,7 +195,7 @@ pub const Compiler = struct {
         self.loopStartStack.deinit(self.allocator);
     }
 
-    pub fn compile(self: *Compiler) !*ObjFunction {
+    pub fn compile(self: *Compiler) !*Obj {
         self.advance();
 
         while (!self.match(TokenType.TOKEN_EOF)) {
@@ -208,11 +208,11 @@ pub const Compiler = struct {
             return CompilerError.ParseError;
         } else if (comptime DEBUG_COMPILER) {
             std.debug.print("\n", .{});
-            self.currentChunk().disassemble(self.function.name.chars);
+            self.currentChunk().disassemble(self.currentFunction().name.chars);
             std.debug.print("\n", .{});
         }
 
-        return self.function;
+        return self.functionObject;
     }
 
     fn declaration(self: *Compiler) anyerror!void {
@@ -229,8 +229,6 @@ pub const Compiler = struct {
         const global = try self.parseVariable("Expect function name.");
 
         var inner = try Compiler.init(self.io, self.allocator, self.scanner, self.vm, self, FunctionType.FUNCTION);
-        inner.current = self.current;
-        inner.previous = self.previous;
         defer inner.deinit();
 
         const value = try inner.fun();
@@ -248,8 +246,8 @@ pub const Compiler = struct {
         self.consume(TokenType.TOKEN_LEFT_PAREN, "Expect '(' after function name.");
         if (!self.check(TokenType.TOKEN_RIGHT_PAREN)) {
             while (true) {
-                self.function.arity += 1;
-                if (self.function.arity > 0xFF) {
+                self.currentFunction().arity += 1;
+                if (self.currentFunction().arity > 0xFF) {
                     self.errorAtCurrent("Can't have more than 255 parameters");
                 }
                 const constant = try self.parseVariable("Expect parameter name.");
@@ -267,12 +265,7 @@ pub const Compiler = struct {
 
         try self.emitReturn();
 
-        // TODO: Figure out who frees this and when.
-        var obj = try self.allocator.create(Obj);
-        obj.data = ObjData{ .function = self.function };
-        obj.next = self.vm.objects;
-        self.vm.objects = obj;
-        return value_mod.objValue(obj);
+        return value_mod.objValue(self.functionObject);
     }
 
     fn statement(self: *Compiler) anyerror!void {
@@ -550,7 +543,7 @@ pub const Compiler = struct {
     }
 
     fn identifierConstant(self: *Compiler) !u24 {
-        const obj = try value_mod.copyString(self.allocator, self.vm, self.previous.lexeme);
+        const obj = try self.vm.heap.copyString(self.previous.lexeme);
         const constant = self.currentChunk().findValue(obj.data.str.chars);
         if (constant != null) {
             return constant.?;
@@ -658,7 +651,7 @@ pub const Compiler = struct {
         var i = self.locals.items.len;
         while (i > 0) : (i -= 1) {
             if (std.mem.eql(u8, self.locals.items[i - 1].name, name)) {
-                return @intCast(i);
+                return @intCast(i - 1);
             }
         }
 
@@ -667,12 +660,8 @@ pub const Compiler = struct {
 
     fn string(self: *Compiler, _: bool) !void {
         const input = self.previous.lexeme[1 .. self.previous.lexeme.len - 1];
-        // For strings as constant value on the stack we retain a pointer into the original source.
-        // This memory is not freed by the garbage collector by marking obj.owned to false.
-        const value = try value_mod.strValue(self.allocator, input);
-        value.obj.next = self.vm.objects;
-        self.vm.objects = value.obj;
-        try self.emitConstant(value);
+        const object = try self.vm.heap.copyString(input);
+        try self.emitConstant(value_mod.objValue(object));
     }
 
     fn grouping(self: *Compiler, _: bool) !void {
@@ -952,8 +941,12 @@ pub const Compiler = struct {
         self.hadError = true;
     }
 
+    fn currentFunction(self: *Compiler) *ObjFunction {
+        return self.functionObject.data.function;
+    }
+
     fn currentChunk(self: *Compiler) *Chunk {
-        return &self.function.chunk;
+        return &self.currentFunction().chunk;
     }
 };
 
@@ -1005,20 +998,20 @@ test "compiler trace is compact and readable" {
 }
 
 test "compiler" {
-    try testCompile("(1 + 2) * (3 + 4)");
+    try testCompile("(1 + 2) * (3 + 4);");
 }
 
 test "compiler complex expression" {
-    const source = "(-1 + 2) * 3 - -4";
+    const source = "(-1 + 2) * 3 - -4;";
     try testCompile(source);
 }
 
 test "compiler boolean logic" {
-    try testCompile("true or false");
+    try testCompile("true or false;");
 }
 
 test "compiler strings" {
-    try testCompile("\"hello world\"");
+    try testCompile("\"hello world\";");
 }
 
 fn testCompile(source: [*]const u8) !void {
@@ -1027,6 +1020,7 @@ fn testCompile(source: [*]const u8) !void {
 
     var scanner = Scanner.init(source);
     var compiler = try Compiler.init(std.testing.io, std.testing.allocator, &scanner, &vm, null, FunctionType.SCRIPT);
+    defer compiler.deinit();
 
-    try compiler.compile();
+    _ = try compiler.compile();
 }

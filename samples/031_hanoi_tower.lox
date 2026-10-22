@@ -1,0 +1,11 @@
+fun hanoi(n, from, to, aux) {
+    if (n == 0) return;
+
+    hanoi(n - 1, from, aux, to);
+
+    print "Move disk " + n + " from " + from + " to " + to;
+
+    hanoi(n - 1, aux, to, from);
+}
+
+hanoi(4, "A", "C", "B");

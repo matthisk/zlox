@@ -18,8 +18,9 @@ pub fn main(init: std.process.Init) !void {
         defer file.close(init.io);
 
         const file_size = try file.length(init.io);
-        const source = try allocator.alloc(u8, file_size);
-        _ = try file.readPositionalAll(init.io, source, 0);
+        const source = try allocator.alloc(u8, file_size + 1);
+        _ = try file.readPositionalAll(init.io, source[0..file_size], 0);
+        source[file_size] = 0;
 
         defer allocator.free(source);
 
