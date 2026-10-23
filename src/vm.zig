@@ -435,7 +435,7 @@ pub const VM = struct {
 
     fn printProgramValue(self: *VM, v: Value) !void {
         var buffer: [256]u8 = undefined;
-        var stdout_writer = std.Io.File.stdout().writer(self.io, &buffer);
+        var stdout_writer = std.Io.File.stdout().writerStreaming(self.io, &buffer);
         const stdout = &stdout_writer.interface;
         try value.write(v, stdout);
         try stdout.writeByte('\n');
