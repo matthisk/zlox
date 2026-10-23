@@ -51,6 +51,10 @@ zig build run
 # Run tests
 zig build test
 
+# Run benchmarks (optionally filtered by name)
+zig build bench
+zig build bench -- fib loop
+
 # Run test of specific file
 zig test {filepath}
 ```

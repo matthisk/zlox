@@ -1,0 +1,12 @@
+// Builds many unique strings: stresses allocation, hashing and interning.
+var start = clock();
+var last = "";
+for (var i = 0; i < 20000; i = i + 1) {
+  var s = str(i) + ":";
+  for (var j = 0; j < 50; j = j + 1) {
+    s = s + str(j);
+  }
+  last = s;
+}
+print last;
+print clock() - start;

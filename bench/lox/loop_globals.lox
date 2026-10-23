@@ -1,0 +1,8 @@
+// Same loop as loop_locals but over globals: stresses global hash-table lookups.
+var start = clock();
+var sum = 0;
+for (var i = 0; i < 10000000; i = i + 1) {
+  sum = sum + i;
+}
+print sum;
+print clock() - start;

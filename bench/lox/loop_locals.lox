@@ -1,0 +1,10 @@
+// Tight loop over block-scoped locals: stresses dispatch, OP_LOOP and GET/SET_LOCAL.
+var start = clock();
+{
+  var sum = 0;
+  for (var i = 0; i < 10000000; i = i + 1) {
+    sum = sum + i;
+  }
+  print sum;
+}
+print clock() - start;

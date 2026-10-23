@@ -11,6 +11,7 @@ ZLox is a Zig implementation of the bytecode interpreter from *Crafting Interpre
 - `zig build run` starts the interactive REPL.
 - `zig build run -- samples/023_for.lox` runs a Lox source file.
 - `zig build test` runs all tests reachable from `src/main.zig`.
+- `zig build bench` runs the benchmarks in `bench/lox` against a ReleaseFast build; `zig build bench -- fib loop` runs only benchmarks whose name contains one of the filters.
 - `zig fmt src build.zig build.zig.zon` formats Zig sources and build files.
 
 Run commands from the repository root because integration tests resolve fixtures through `samples/`.

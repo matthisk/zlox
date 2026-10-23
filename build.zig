@@ -79,6 +79,61 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_exe_unit_tests.step);
 
+    // A `bench` step that runs the Lox programs in bench/lox against an
+    // optimized zlox build. Pass benchmark names to run a subset:
+    // `zig build bench -- fib loop`
+    const bench_options = b.addOptions();
+    bench_options.addOption(bool, "debug_scanner", false);
+    bench_options.addOption(bool, "debug_compiler", false);
+    bench_options.addOption(bool, "debug_vm", false);
+
+    const bench_zlox_mod = b.createModule(.{
+        .root_source_file = b.path("src/main.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+    bench_zlox_mod.addOptions("config", bench_options);
+
+    const bench_zlox = b.addExecutable(.{
+        .name = "zlox-bench",
+        .root_module = bench_zlox_mod,
+    });
+
+    const gen_compile_large = b.addExecutable(.{
+        .name = "gen-compile-large",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("bench/gen_compile_large.zig"),
+            .target = b.graph.host,
+        }),
+    });
+    const gen_compile_large_run = b.addRunArtifact(gen_compile_large);
+    const compile_large_lox = gen_compile_large_run.addOutputFileArg("compile_large.lox");
+
+    const bench_programs = b.addWriteFiles();
+    _ = bench_programs.addCopyDirectory(b.path("bench/lox"), "", .{});
+    _ = bench_programs.addCopyFile(compile_large_lox, "compile_large.lox");
+
+    const bench_runner = b.addExecutable(.{
+        .name = "bench-runner",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("bench/runner.zig"),
+            .target = b.graph.host,
+            .optimize = .ReleaseFast,
+        }),
+    });
+
+    const bench_cmd = b.addRunArtifact(bench_runner);
+    bench_cmd.addArtifactArg(bench_zlox);
+    bench_cmd.addDirectoryArg(bench_programs.getDirectory());
+    bench_cmd.addDirectoryArg(b.path("bench/expected"));
+    bench_cmd.has_side_effects = true;
+    if (b.args) |args| {
+        bench_cmd.addArgs(args);
+    }
+
+    const bench_step = b.step("bench", "Run benchmarks (optionally filtered by name)");
+    bench_step.dependOn(&bench_cmd.step);
+
     // A `check` step for ZLS build-on-save diagnostics. These artifacts are not
     // installed, so Zig skips emitting binaries and only runs semantic analysis.
     const exe_check = b.addExecutable(.{
