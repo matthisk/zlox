@@ -37,6 +37,22 @@ const RuntimeFault = union(enum) {
     stack_overflow,
     not_callable,
     illegal_opcode: u8,
+
+    pub fn format(self: RuntimeFault, writer: *std.Io.Writer) std.Io.Writer.Error!void {
+        switch (self) {
+            .operand_must_be_number => try writer.writeAll("Operand must be a number."),
+            .operands_must_be_numbers => try writer.writeAll("Operands must be numbers."),
+            .operands_must_be_numbers_or_strings => try writer.writeAll("Operands must be two numbers or two strings."),
+            .undefined_variable => |name| try writer.print("Undefined variable '{s}'", .{name}),
+            .expected_arguments => |arguments| try writer.print(
+                "Expected {d} arguments but got {d}",
+                .{ arguments.expected, arguments.actual },
+            ),
+            .stack_overflow => try writer.writeAll("Stack overflow"),
+            .not_callable => try writer.writeAll("Can only call functions."),
+            .illegal_opcode => |opcode| try writer.print("Unknown opcode 0x{x:0>2}.", .{opcode}),
+        }
+    }
 };
 
 const FRAMES_MAX = 64;
@@ -162,7 +178,7 @@ pub const VM = struct {
                             self.stack.items[self.stack.items.len - 1].number *= -1;
                         },
                         else => {
-                            break :dispatch .operands_must_be_numbers;
+                            break :dispatch .operand_must_be_number;
                         },
                     }
                 },
@@ -359,7 +375,7 @@ pub const VM = struct {
             };
             try self.stack.append(self.allocator, result);
         } else {
-            return .operands_must_be_numbers_or_strings;
+            return .operands_must_be_numbers;
         }
 
         return null;
@@ -480,8 +496,7 @@ pub const VM = struct {
         const line = frame.function.chunk.getLine(instruction);
 
         std.debug.print("[vm] runtime error | line {d} | ", .{line});
-        // TODO: improve printing of this error.
-        std.debug.print("{any}\n", .{runtimeFault});
+        std.debug.print("{f}\n", .{runtimeFault});
 
         for (1..self.frameCount + 1) |incIndex| {
             const i = self.frameCount - incIndex;
