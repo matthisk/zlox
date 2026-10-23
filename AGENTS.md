@@ -1,5 +1,9 @@
 # Repository Guidelines
 
+## Purpose
+
+This is a repository I use for learning how to build interpreters. As such when you make suggestions to me, or propose code changes keep the scope as minimal as possible. I need to easily understand any code changes and proposals you make so I can learn from them. Also keep in mind this isn't a production grade virtual machine implementation. We do care about performance, but mainly to learn how these performance optimizations work.
+
 ## Project Structure & Module Organization
 
 ZLox is a Zig implementation of the bytecode interpreter from *Crafting Interpreters*. Production code lives in `src/`: `main.zig` provides the CLI/REPL, `engine.zig` coordinates compilation and execution, `scanner.zig` tokenizes source, `compiler.zig` emits bytecode, and `vm.zig`, `chunk.zig`, and `value.zig` implement runtime storage and evaluation. Numbered programs in `samples/` act as integration fixtures. Build metadata is in `build.zig` and `build.zig.zon`; `flake.nix` and `flake.lock` define the optional Nix development environment.
