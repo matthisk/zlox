@@ -48,7 +48,9 @@ pub const Engine = struct {
             },
         };
 
-        if (!try self.vm.startScript(functionObject)) return;
+        if (try self.vm.startScript(functionObject)) |_| {
+            return;
+        }
 
         _ = try self.vm.run();
     }
