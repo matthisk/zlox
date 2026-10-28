@@ -1,6 +1,7 @@
 const std = @import("std");
 const value_mod = @import("value.zig");
 const Value = value_mod.Value;
+const ObjFunction = value_mod.ObjFunction;
 
 pub const OpCode = enum(u8) {
     OP_RETURN,
@@ -22,6 +23,7 @@ pub const OpCode = enum(u8) {
     OP_GREATER,
     OP_PRINT,
     OP_CALL,
+    OP_CLOSURE,
     OP_POP,
     OP_POPN,
     OP_POPN_LONG,
@@ -30,6 +32,9 @@ pub const OpCode = enum(u8) {
     OP_SET_GLOBAL,
     OP_GET_LOCAL,
     OP_SET_LOCAL,
+    OP_GET_UPVALUE,
+    OP_SET_UPVALUE,
+    OP_CLOSE_UPVALUE,
     OP_JUMP_IF_FALSE,
     OP_JUMP,
     OP_LOOP,
@@ -73,9 +78,21 @@ pub const Chunk = struct {
                     const index = std.mem.readInt(u24, bytes, .big);
                     try writer.print("{s} [{d}] {f}", .{ name, index, value_mod.format(self.chunk.data.items[index]) });
                 },
-                .OP_GET_LOCAL, .OP_SET_LOCAL => {
-                    const slot = self.chunk.code.items[self.offset + 1];
-                    try writer.print("{s} slot {d}", .{ name, slot });
+                .OP_GET_UPVALUE, .OP_SET_UPVALUE, .OP_GET_LOCAL, .OP_SET_LOCAL => {
+                    const bytes = self.chunk.code.items[self.offset + 1 ..][0..3];
+                    const index = std.mem.readInt(u24, bytes, .big);
+                    try writer.print("{s} [{d}]", .{ name, index });
+                },
+                .OP_CLOSURE => {
+                    const index = self.chunk.code.items[self.offset + 1];
+                    const upvalueCount = value_mod.asFunction(self.chunk.data.items[index]).upvalueCount;
+                    try writer.print("{s} [{d}]", .{ name, index });
+                    for (0..upvalueCount) |i| {
+                        const isLocal = self.chunk.code.items[1 + self.offset + i * 4 + 1];
+                        const bytes = self.chunk.code.items[1 + self.offset + i * 4 + 2 ..][0..3];
+                        const idx = std.mem.readInt(u24, bytes, .big);
+                        try writer.print(" ~ upvalue {s} [{d}]", .{ if (isLocal == 1) "<local>" else "", idx });
+                    }
                 },
                 .OP_JUMP_IF_FALSE, .OP_JUMP, .OP_LOOP => {
                     const high = self.chunk.code.items[self.offset + 1];
@@ -201,8 +218,13 @@ pub const Chunk = struct {
         const op = std.enums.fromInt(OpCode, self.code.items[offset]) orelse return 1;
         return switch (op) {
             .OP_CONSTANT, .OP_CALL => 2,
-            .OP_CONSTANT_LONG, .OP_DEFINE_GLOBAL, .OP_GET_LOCAL, .OP_SET_LOCAL, .OP_GET_GLOBAL, .OP_SET_GLOBAL => 4,
+            .OP_CONSTANT_LONG, .OP_DEFINE_GLOBAL, .OP_GET_LOCAL, .OP_SET_LOCAL, .OP_GET_GLOBAL, .OP_SET_GLOBAL, .OP_GET_UPVALUE, .OP_SET_UPVALUE => 4,
             .OP_JUMP_IF_FALSE, .OP_JUMP, .OP_LOOP => 3,
+            .OP_CLOSURE => {
+                const idx = self.code.items[offset + 1];
+                const upvalueCount = value_mod.asFunction(self.data.items[idx]).upvalueCount;
+                return 2 + upvalueCount * 4;
+            },
             else => 1,
         };
     }

@@ -8,6 +8,8 @@ const OpCode = chunk_mod.OpCode;
 const Value = value.Value;
 const Obj = value.Obj;
 const ObjFunction = value.ObjFunction;
+const ObjClosure = value.ObjClosure;
+const ObjUpvalue = value.ObjUpvalue;
 
 pub const InterpretResult = enum {
     OK,
@@ -20,6 +22,7 @@ const BinaryOperator = enum { PLUS, MULTIPLY, DIVIDE, SUBTRACT, LESS, GREATER };
 const Errors = error{RuntimeError};
 
 const CallFrame = struct {
+    closure: *ObjClosure,
     function: *ObjFunction,
     ip: [*]u8,
     slots: usize,
@@ -69,6 +72,7 @@ pub const VM = struct {
     globals: std.StringHashMap(Value),
     frames: [FRAMES_MAX]CallFrame = undefined,
     frameCount: usize,
+    openUpvalues: ?*ObjUpvalue = null,
 
     pub fn init(io: std.Io, allocator: std.mem.Allocator) !VM {
         var vm = VM{
@@ -109,12 +113,16 @@ pub const VM = struct {
     }
 
     pub fn startScript(self: *VM, functionObject: *Obj) !?RuntimeFault {
-        try self.stack.append(self.allocator, value.objValue(functionObject));
-        return self.call(functionObject.data.function, 0);
+        const function = functionObject.data.function;
+        const closure = try self.heap.createClosure(function);
+        try self.stack.append(self.allocator, value.objValue(closure));
+        return self.call(closure.data.closure, 0);
     }
 
     pub fn run(self: *VM) !InterpretResult {
         var frame = &self.frames[self.frameCount - 1];
+        var constants = frame.closure.function.chunk.data.items;
+        var code = frame.closure.function.chunk.code.items.ptr;
         var ip = frame.ip;
 
         if (comptime DEBUG_VM) {
@@ -123,7 +131,7 @@ pub const VM = struct {
 
         var instruction_count: usize = 0;
         const runtimeFault: RuntimeFault = dispatch: while (true) {
-            const instruction_offset = @intFromPtr(ip) - @intFromPtr(frame.function.chunk.code.items.ptr);
+            const instruction_offset = @intFromPtr(ip) - @intFromPtr(code);
             if (comptime DEBUG_VM) {
                 if (instruction_count < DEBUG_INSTRUCTION_LIMIT) {
                     std.debug.print("{f}", .{ExecutionTrace{ .vm = self, .offset = instruction_offset }});
@@ -141,6 +149,7 @@ pub const VM = struct {
             switch (instruction) {
                 OpCode.OP_RETURN => {
                     const result = self.stack.pop().?;
+                    self.closeUpvalues(&self.stack.items[frame.slots]);
                     self.frameCount -= 1;
                     if (self.frameCount == 0) {
                         _ = self.stack.pop().?;
@@ -150,6 +159,8 @@ pub const VM = struct {
                     self.stack.shrinkRetainingCapacity(frame.slots);
                     try self.stack.append(self.allocator, result);
                     frame = &self.frames[self.frameCount - 1];
+                    constants = frame.closure.function.chunk.data.items;
+                    code = frame.closure.function.chunk.code.items.ptr;
                     ip = frame.ip;
                 },
                 OpCode.OP_TRUE => {
@@ -162,11 +173,11 @@ pub const VM = struct {
                     try self.stack.append(self.allocator, value.nilValue());
                 },
                 OpCode.OP_CONSTANT => {
-                    const constant = self.readConstant(&ip, frame);
+                    const constant = self.readConstant(&ip, constants);
                     try self.stack.append(self.allocator, constant);
                 },
                 OpCode.OP_CONSTANT_LONG => {
-                    const constant = self.readLongConstant(&ip, frame);
+                    const constant = self.readLongConstant(&ip, constants);
                     try self.stack.append(self.allocator, constant);
                 },
                 OpCode.OP_NOT => {
@@ -250,6 +261,35 @@ pub const VM = struct {
                     const v = self.stack.pop().?;
                     try self.printProgramValue(v);
                 },
+                OpCode.OP_CLOSURE => {
+                    const f = value.asFunction(self.readConstant(&ip, constants));
+                    const c = try self.heap.createClosure(f);
+
+                    for (0..f.upvalueCount) |i| {
+                        const isLocal = self.readByte(&ip);
+                        const index = self.readMedium(&ip);
+
+                        if (isLocal == 1) {
+                            c.data.closure.upvalues[i] = try self.captureUpvalue(&self.stack.items[frame.slots + index]);
+                        } else {
+                            c.data.closure.upvalues[i] = frame.closure.upvalues[i];
+                        }
+                    }
+
+                    try self.stack.append(self.allocator, value.objValue(c));
+                },
+                OpCode.OP_GET_UPVALUE => {
+                    const slot = self.readMedium(&ip);
+                    try self.stack.append(self.allocator, frame.closure.upvalues[slot].location.*);
+                },
+                OpCode.OP_SET_UPVALUE => {
+                    const slot = self.readMedium(&ip);
+                    frame.closure.upvalues[slot].location.* = self.peekStack(0);
+                },
+                OpCode.OP_CLOSE_UPVALUE => {
+                    self.closeUpvalues(&self.stack.items[self.stack.items.len - 1]);
+                    _ = self.stack.pop();
+                },
                 OpCode.OP_CALL => {
                     const argCount = self.readByte(&ip);
 
@@ -260,15 +300,17 @@ pub const VM = struct {
                         break :dispatch err;
                     }
                     frame = &self.frames[self.frameCount - 1];
+                    constants = frame.closure.function.chunk.data.items;
+                    code = frame.closure.function.chunk.code.items.ptr;
                     ip = frame.ip;
                 },
                 OpCode.OP_DEFINE_GLOBAL => {
                     // TODO: We globals shouldn't always require a long constant slot.
-                    const identifier = self.readLongConstant(&ip, frame);
+                    const identifier = self.readLongConstant(&ip, constants);
                     try self.globals.put(identifier.obj.data.str.chars, self.stack.pop().?);
                 },
                 OpCode.OP_GET_GLOBAL => {
-                    const identfier = self.readLongConstant(&ip, frame);
+                    const identfier = self.readLongConstant(&ip, constants);
                     const v = self.globals.get(identfier.obj.data.str.chars);
 
                     if (v == null) {
@@ -278,7 +320,7 @@ pub const VM = struct {
                     }
                 },
                 OpCode.OP_SET_GLOBAL => {
-                    const identifier = self.readLongConstant(&ip, frame);
+                    const identifier = self.readLongConstant(&ip, constants);
                     const name = identifier.obj.data.str.chars;
                     if (self.globals.contains(name)) {
                         try self.globals.put(name, self.peekStack(0));
@@ -319,6 +361,39 @@ pub const VM = struct {
         return InterpretResult.RUNTIME_ERROR;
     }
 
+    inline fn closeUpvalues(self: *VM, last: *Value) void {
+        while (self.openUpvalues != null and @intFromPtr(self.openUpvalues.?.location) >= @intFromPtr(last)) {
+            const upvalue = self.openUpvalues.?;
+            upvalue.closed = upvalue.location.*;
+            upvalue.location = &upvalue.closed;
+            self.openUpvalues = upvalue.next;
+        }
+    }
+
+    inline fn captureUpvalue(self: *VM, local: *Value) !*ObjUpvalue {
+        var prevUpvalue: ?*ObjUpvalue = null;
+        var upvalue = self.openUpvalues;
+
+        while (upvalue != null and @intFromPtr(upvalue.?.location) > @intFromPtr(local)) {
+            prevUpvalue = upvalue;
+            upvalue = upvalue.?.next;
+        }
+
+        if (upvalue != null and upvalue.?.location == local) {
+            return upvalue.?;
+        }
+
+        const createdUpvalue = try self.heap.createUpvalue(local);
+
+        if (prevUpvalue == null) {
+            self.openUpvalues = createdUpvalue;
+        } else {
+            prevUpvalue.?.next = createdUpvalue;
+        }
+
+        return createdUpvalue;
+    }
+
     inline fn readByte(_: *VM, ip: *[*]u8) u8 {
         const b = ip.*[0];
         ip.* += 1;
@@ -340,14 +415,14 @@ pub const VM = struct {
         return (@as(u24, high) << 16) | (@as(u24, mid) << 8) | low;
     }
 
-    inline fn readConstant(self: *VM, ip: *[*]u8, frame: *CallFrame) Value {
+    inline fn readConstant(self: *VM, ip: *[*]u8, constants: []Value) Value {
         const pos = self.readByte(ip);
-        return frame.function.chunk.data.items[pos];
+        return constants[pos];
     }
 
-    inline fn readLongConstant(self: *VM, ip: *[*]u8, frame: *CallFrame) Value {
+    inline fn readLongConstant(self: *VM, ip: *[*]u8, constants: []Value) Value {
         const pos = self.readMedium(ip);
-        return frame.function.chunk.data.items[pos];
+        return constants[pos];
     }
 
     inline fn binaryOp(self: *VM, comptime op: BinaryOperator) !?RuntimeFault {
@@ -411,14 +486,14 @@ pub const VM = struct {
     }
 
     inline fn callValue(self: *VM, callee: Value, argCount: u8) !?RuntimeFault {
-        if (value.isFunction(callee)) {
-            if (argCount != callee.obj.data.function.arity) {
+        if (value.isClosure(callee)) {
+            if (argCount != callee.obj.data.closure.function.arity) {
                 return .{ .expected_arguments = .{
-                    .expected = callee.obj.data.function.arity,
+                    .expected = callee.obj.data.closure.function.arity,
                     .actual = argCount,
                 } };
             }
-            return try self.call(callee.obj.data.function, argCount);
+            return try self.call(callee.obj.data.closure, argCount);
         }
         if (value.isNative(callee)) {
             const native = value.asNative(callee);
@@ -438,15 +513,16 @@ pub const VM = struct {
         return .not_callable;
     }
 
-    fn call(self: *VM, func: *ObjFunction, argCount: u8) !?RuntimeFault {
+    fn call(self: *VM, closure: *ObjClosure, argCount: u8) !?RuntimeFault {
         if (self.frameCount == FRAMES_MAX) {
             return .stack_overflow;
         }
 
         var frame = &self.frames[self.frameCount];
         self.frameCount += 1;
-        frame.function = func;
-        frame.ip = func.chunk.code.items.ptr;
+        frame.closure = closure;
+        frame.function = closure.function;
+        frame.ip = closure.function.chunk.code.items.ptr;
         frame.slots = self.stack.items.len - argCount - 1;
         return null;
     }
@@ -492,8 +568,8 @@ pub const VM = struct {
 
     fn runtimeError(self: *VM, runtimeFault: RuntimeFault) void {
         const frame = &self.frames[self.frameCount - 1];
-        const instruction = @intFromPtr(frame.ip) - @intFromPtr(frame.function.chunk.code.items.ptr) - 1;
-        const line = frame.function.chunk.getLine(instruction);
+        const instruction = @intFromPtr(frame.ip) - @intFromPtr(frame.closure.function.chunk.code.items.ptr) - 1;
+        const line = frame.closure.function.chunk.getLine(instruction);
 
         std.debug.print("[vm] runtime error | line {d} | ", .{line});
         std.debug.print("{f}\n", .{runtimeFault});
@@ -528,6 +604,8 @@ pub fn strNative(vm: *VM, argCount: usize, args: []const Value) !Value {
             .str => o,
             .function => try vm.heap.copyString("function"),
             .native => try vm.heap.copyString("native"),
+            .closure => try vm.heap.copyString("function"),
+            .upvalue => try vm.heap.copyString("upvalue"),
         },
     };
 
@@ -561,10 +639,10 @@ const ExecutionTrace = struct {
 
     pub fn format(self: ExecutionTrace, writer: *std.Io.Writer) std.Io.Writer.Error!void {
         const frame = self.vm.frames[self.vm.frameCount - 1];
-        const line = frame.function.chunk.getLine(self.offset);
+        const line = frame.closure.function.chunk.getLine(self.offset);
         var instruction_buffer: [256]u8 = undefined;
         var instruction_writer: std.Io.Writer = .fixed(&instruction_buffer);
-        try instruction_writer.print("{f}", .{frame.function.chunk.formatInstruction(self.offset, false)});
+        try instruction_writer.print("{f}", .{frame.closure.function.chunk.formatInstruction(self.offset, false)});
 
         try writer.print("[vm] {d:0>4} line {d: >4} | {s: <32} | stack [", .{
             self.offset,
@@ -585,7 +663,7 @@ const ExecutionTrace = struct {
 
         if (stack.len > 0) try writer.writeAll(" <- top");
 
-        const byte = frame.function.chunk.code.items[self.offset];
+        const byte = frame.closure.function.chunk.code.items[self.offset];
         const op = std.enums.fromInt(OpCode, byte) orelse OpCode.ILLEGAL;
         if (op == OpCode.OP_JUMP_IF_FALSE and stack.len > 0) {
             try writer.writeAll(if (isFalsey(stack[stack.len - 1])) " | taken" else " | not taken");

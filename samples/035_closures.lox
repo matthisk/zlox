@@ -1,0 +1,11 @@
+fun outer() {
+  var x = 0;
+
+  fun inner() {
+    print x;
+  }
+
+  inner();
+}
+
+outer();

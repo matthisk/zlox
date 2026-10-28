@@ -13,14 +13,30 @@ pub const Value = union(enum) {
     obj: *Obj,
 };
 
+pub const ObjClosure = struct {
+    obj: *Obj,
+    function: *ObjFunction,
+    upvalues: []*ObjUpvalue,
+};
+
+pub const ObjUpvalue = struct {
+    obj: ?*Obj = null,
+    location: *Value,
+    closed: Value = .nil,
+    next: ?*ObjUpvalue = null,
+};
+
 pub const ObjFunction = struct {
+    obj: *Obj,
     arity: usize,
     chunk: Chunk,
+    upvalueCount: u8 = 0,
     name: *ObjStr = undefined,
 
     pub fn create(allocator: std.mem.Allocator) !*ObjFunction {
         var objFn = try allocator.create(ObjFunction);
         objFn.arity = 0;
+        objFn.upvalueCount = 0;
         objFn.chunk = Chunk.init(allocator);
         return objFn;
     }
@@ -32,6 +48,7 @@ pub const ObjFunction = struct {
 };
 
 pub const ObjNative = struct {
+    obj: *Obj,
     arity: usize,
     function: NativeFn,
 };
@@ -50,6 +67,13 @@ pub const Obj = struct {
             .native => |n| {
                 allocator.destroy(n);
             },
+            .closure => |o| {
+                allocator.free(o.upvalues);
+                allocator.destroy(o);
+            },
+            .upvalue => |u| {
+                allocator.destroy(u);
+            },
         }
         allocator.destroy(self);
     }
@@ -59,6 +83,8 @@ pub const ObjData = union(enum) {
     str: ObjStr,
     function: *ObjFunction,
     native: *ObjNative,
+    closure: *ObjClosure,
+    upvalue: *ObjUpvalue,
 };
 
 pub const ObjStr = struct {
@@ -125,6 +151,10 @@ pub inline fn asNative(v: Value) *ObjNative {
     return v.obj.data.native;
 }
 
+pub inline fn asClosure(v: Value) *ObjClosure {
+    return v.obj.data.closure;
+}
+
 pub inline fn asStr(v: Value) []const u8 {
     return v.obj.data.str.chars;
 }
@@ -149,6 +179,16 @@ pub inline fn isNative(v: Value) bool {
     };
 }
 
+pub inline fn isClosure(v: Value) bool {
+    return switch (v) {
+        .obj => |o| switch (o.data) {
+            .closure => true,
+            else => false,
+        },
+        else => false,
+    };
+}
+
 pub const Formatter = struct {
     value: Value,
 
@@ -164,6 +204,9 @@ pub const Formatter = struct {
                     const ellipsis: []const u8 = if (preview_length < string.chars.len) "..." else "";
                     try writer.print("\"{f}\"{s}", .{ std.zig.fmtString(preview), ellipsis });
                 },
+                .closure => |c| {
+                    try writer.print("<fn {s}>", .{c.function.name.chars});
+                },
                 .function => |f| {
                     if (std.mem.eql(u8, f.name.chars, "<script>")) {
                         try writer.print("<script>", .{});
@@ -173,6 +216,9 @@ pub const Formatter = struct {
                 },
                 .native => {
                     try writer.print("<native>", .{});
+                },
+                .upvalue => {
+                    try writer.print("<upvalue>", .{});
                 },
             },
         }
@@ -192,6 +238,8 @@ pub fn write(v: Value, writer: *std.Io.Writer) std.Io.Writer.Error!void {
             .str => |string| try writer.writeAll(string.chars),
             .function => |f| try writer.writeAll(f.name.chars),
             .native => try writer.writeAll("<native_fn>"),
+            .closure => |c| try writer.writeAll(c.function.name.chars),
+            .upvalue => try writer.writeAll("<upvalue>"),
         },
     }
 }

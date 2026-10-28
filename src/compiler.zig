@@ -18,7 +18,7 @@ const Chunk = chunk_mod.Chunk;
 const OpCode = chunk_mod.OpCode;
 const ChunkErrors = chunk_mod.ChunkErrors;
 
-const CompilerError = error{ParseError};
+const CompilerError = error{ ParseError, TooManyUpvalues };
 
 const Precedence = enum { NONE, ASSIGNMENT, TERNARY, OR, AND, EQUALITY, COMPARISON, TERM, FACTOR, UNARY, CALL, PRIMARY };
 
@@ -47,10 +47,17 @@ const EmitTrace = struct {
     line: u32,
 };
 
+const LocalTrace = struct {
+    index: usize,
+    name: []const u8,
+    line: u32,
+};
+
 const CompilerTrace = union(enum) {
     prefix: ParseTrace,
     infix: ParseTrace,
     emit: EmitTrace,
+    local: LocalTrace,
 
     pub fn format(self: CompilerTrace, writer: *std.Io.Writer) std.Io.Writer.Error!void {
         switch (self) {
@@ -82,6 +89,9 @@ const CompilerTrace = union(enum) {
                     );
                 }
             },
+            .local => |trace| {
+                try writer.print("[compiler] line {d: >4} | local  | {s} slot={d}\n", .{ trace.line, trace.name, trace.index });
+            },
         }
     }
 };
@@ -91,6 +101,12 @@ const ParseRules = std.EnumArray(TokenType, ParseRule);
 const Local = struct {
     name: []const u8,
     depth: usize,
+    isCaptured: bool,
+};
+
+const Upvalue = struct {
+    index: u24,
+    isLocal: bool,
 };
 
 const UINT8_COUNT = std.math.maxInt(u8) + 1;
@@ -112,7 +128,8 @@ pub const Compiler = struct {
     locals: std.ArrayList(Local) = undefined,
     scopeDepth: usize = 0,
     loopStartStack: std.ArrayList(usize) = undefined,
-    enclosing: *Compiler = undefined,
+    enclosing: ?*Compiler = null,
+    upvalues: [UINT8_COUNT]Upvalue = .{Upvalue{ .index = 0, .isLocal = false }} ** UINT8_COUNT,
 
     pub fn init(io: std.Io, allocator: std.mem.Allocator, scanner: *Scanner, vm: *VM, enclosing: ?*Compiler, fnType: FunctionType) !Compiler {
         var compiler = Compiler{ .io = io, .allocator = allocator, .scanner = scanner, .vm = vm };
@@ -136,6 +153,7 @@ pub const Compiler = struct {
         try compiler.locals.append(allocator, Local{
             .name = "",
             .depth = 0,
+            .isCaptured = false,
         });
         compiler.loopStartStack = std.ArrayList(usize).empty;
 
@@ -241,8 +259,18 @@ pub const Compiler = struct {
         defer inner.deinit();
 
         const value = try inner.fun();
-        try self.emitOpWithMediumOperand(OpCode.OP_CONSTANT_LONG, try self.makeConstant(value));
 
+        const i = try self.makeConstant(value);
+        if (i < 0xFF) {
+            try self.emitOpWithByteOperand(OpCode.OP_CLOSURE, @intCast(i));
+        } else {
+            // TODO: this needs a separate op code.
+            try self.emitOpWithMediumOperand(OpCode.OP_CLOSURE, i);
+        }
+        for (0..inner.functionObject.data.function.upvalueCount) |j| {
+            try self.emitByte(if (inner.upvalues[j].isLocal) 1 else 0);
+            try self.emitMedium(inner.upvalues[j].index);
+        }
         try self.defineVariable(global);
 
         self.current = inner.current;
@@ -334,15 +362,22 @@ pub const Compiler = struct {
         var n: u8 = 0;
         while (self.locals.items.len >= 1 and self.locals.items[self.locals.items.len - 1].depth > self.scopeDepth) {
             n += 1;
-            _ = self.locals.pop();
+            const l = self.locals.pop();
+            if (l != null and l.?.isCaptured) {
+                try self.emitOp(OpCode.OP_CLOSE_UPVALUE);
+            } else {
+                try self.emitOp(OpCode.OP_POP);
+            }
         }
-        if (n < UINT8_COUNT) {
-            try self.emitOp(OpCode.OP_POPN);
-            try self.emitByte(n);
-        } else {
-            try self.emitOp(OpCode.OP_POPN_LONG);
-            try self.emitMedium(n);
-        }
+
+        // TODO: now that we close over upvalues we can no longer use OP_POPN. We need a refactor.
+        //if (n < UINT8_COUNT) {
+        //    try self.emitOp(OpCode.OP_POPN);
+        //    try self.emitByte(n);
+        //} else {
+        //    try self.emitOp(OpCode.OP_POPN_LONG);
+        //    try self.emitMedium(n);
+        //}
     }
 
     fn block(self: *Compiler) !void {
@@ -548,7 +583,8 @@ pub const Compiler = struct {
             }
         }
 
-        try self.locals.append(self.allocator, Local{ .name = name, .depth = self.scopeDepth });
+        self.traceLocal(name, self.locals.items.len);
+        try self.locals.append(self.allocator, Local{ .name = name, .depth = self.scopeDepth, .isCaptured = false });
     }
 
     fn identifierConstant(self: *Compiler) !u24 {
@@ -638,9 +674,15 @@ pub const Compiler = struct {
         var arg = self.resolveLocal(name);
 
         if (arg == null) {
-            arg = try self.identifierConstant();
-            getOp = OpCode.OP_GET_GLOBAL;
-            setOp = OpCode.OP_SET_GLOBAL;
+            if (try self.resolveUpvalue(name)) |a| {
+                arg = a;
+                getOp = OpCode.OP_GET_UPVALUE;
+                setOp = OpCode.OP_SET_UPVALUE;
+            } else {
+                arg = try self.identifierConstant();
+                getOp = OpCode.OP_GET_GLOBAL;
+                setOp = OpCode.OP_SET_GLOBAL;
+            }
         }
 
         const op = if (canAssign and self.match(TokenType.TOKEN_EQUAL)) op: {
@@ -648,11 +690,7 @@ pub const Compiler = struct {
             break :op setOp;
         } else getOp;
 
-        switch (op) {
-            .OP_GET_LOCAL, .OP_SET_LOCAL => try self.emitOpWithMediumOperand(op, @intCast(arg.?)),
-            .OP_GET_GLOBAL, .OP_SET_GLOBAL => try self.emitOpWithMediumOperand(op, arg.?),
-            else => unreachable,
-        }
+        try self.emitOpWithMediumOperand(op, arg.?);
     }
 
     fn resolveLocal(self: *Compiler, name: []const u8) ?u24 {
@@ -665,6 +703,34 @@ pub const Compiler = struct {
         }
 
         return null;
+    }
+
+    fn resolveUpvalue(self: *Compiler, name: []const u8) !?u8 {
+        if (self.enclosing == null) return null;
+
+        if (self.enclosing.?.resolveLocal(name)) |local| {
+            self.enclosing.?.locals.items[local].isCaptured = true;
+            return try self.addUpvalue(local, true);
+        }
+
+        if (try self.enclosing.?.resolveUpvalue(name)) |upvalue| {
+            return try self.addUpvalue(upvalue, false);
+        }
+
+        return null;
+    }
+
+    fn addUpvalue(self: *Compiler, index: u24, isLocal: bool) !u8 {
+        const upvalueCount = self.functionObject.data.function.upvalueCount;
+
+        if (upvalueCount >= UINT8_COUNT) {
+            return CompilerError.TooManyUpvalues;
+        }
+
+        self.upvalues[upvalueCount].isLocal = isLocal;
+        self.upvalues[upvalueCount].index = index;
+        self.functionObject.data.function.upvalueCount += 1;
+        return self.functionObject.data.function.upvalueCount - 1;
     }
 
     fn string(self: *Compiler, _: bool) !void {
@@ -929,6 +995,12 @@ pub const Compiler = struct {
             .operand = operand,
             .line = self.previous.line,
         } }});
+    }
+
+    fn traceLocal(self: *Compiler, name: []const u8, index: usize) void {
+        if (comptime !DEBUG_COMPILER) return;
+
+        std.debug.print("{f}", .{CompilerTrace{ .local = .{ .name = name, .line = self.previous.line, .index = index } }});
     }
 
     fn errorAtCurrent(self: *Compiler, msg: []const u8) void {

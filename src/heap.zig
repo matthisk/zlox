@@ -1,10 +1,13 @@
 const std = @import("std");
 const value_mod = @import("value.zig");
 
+const Value = value_mod.Value;
 const Obj = value_mod.Obj;
 const ObjData = value_mod.ObjData;
 const ObjFunction = value_mod.ObjFunction;
 const ObjNative = value_mod.ObjNative;
+const ObjClosure = value_mod.ObjClosure;
+const ObjUpvalue = value_mod.ObjUpvalue;
 const ObjStr = value_mod.ObjStr;
 
 /// Owns heap allocated runtime objects and their linked list.
@@ -35,6 +38,15 @@ pub const Heap = struct {
         const object = try self.allocator.create(Obj);
         object.* = .{ .next = null, .data = data };
         self.register(object);
+
+        switch (data) {
+            .closure => |c| c.obj = object,
+            .function => |f| f.obj = object,
+            .native => |n| n.obj = object,
+            .upvalue => |u| u.obj = object,
+            else => {},
+        }
+
         return object;
     }
 
@@ -60,6 +72,27 @@ pub const Heap = struct {
         native.arity = arity;
 
         return try self.createObject(.{ .native = native });
+    }
+
+    pub fn createClosure(self: *Heap, fun: *ObjFunction) !*Obj {
+        const closure = try self.allocator.create(ObjClosure);
+        errdefer self.allocator.destroy(closure);
+        closure.function = fun;
+        closure.upvalues = try self.allocator.alloc(*ObjUpvalue, fun.upvalueCount);
+        errdefer self.allocator.free(closure.upvalues);
+
+        return try self.createObject(.{ .closure = closure });
+    }
+
+    pub fn createUpvalue(self: *Heap, value: *Value) !*ObjUpvalue {
+        const upvalue = try self.allocator.create(ObjUpvalue);
+        errdefer self.allocator.destroy(upvalue);
+        upvalue.location = value;
+        upvalue.next = null;
+        upvalue.closed = .nil;
+        upvalue.obj = null;
+
+        return upvalue;
     }
 
     /// Return an interned string, copying `chars` into heap-owned storage when
