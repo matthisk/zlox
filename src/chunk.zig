@@ -24,6 +24,7 @@ pub const OpCode = enum(u8) {
     OP_PRINT,
     OP_CALL,
     OP_CLOSURE,
+    OP_CLOSURE_LONG,
     OP_POP,
     OP_POPN,
     OP_POPN_LONG,
@@ -86,13 +87,17 @@ pub const Chunk = struct {
                     const index = std.mem.readInt(u24, bytes, .big);
                     try writer.print("{s} [{d}]", .{ name, index });
                 },
-                .OP_CLOSURE => {
-                    const index = self.chunk.code.items[self.offset + 1];
+                .OP_CLOSURE, .OP_CLOSURE_LONG => {
+                    const operandLength: usize = if (op == .OP_CLOSURE) 1 else 3;
+                    const index = if (op == .OP_CLOSURE)
+                        self.chunk.code.items[self.offset + 1]
+                    else
+                        std.mem.readInt(u24, self.chunk.code.items[self.offset + 1 ..][0..3], .big);
                     const upvalueCount = value_mod.asFunction(self.chunk.data.items[index]).upvalueCount;
                     try writer.print("{s} [{d}]", .{ name, index });
                     for (0..upvalueCount) |i| {
-                        const isLocal = self.chunk.code.items[1 + self.offset + i * 4 + 1];
-                        const bytes = self.chunk.code.items[1 + self.offset + i * 4 + 2 ..][0..3];
+                        const isLocal = self.chunk.code.items[operandLength + self.offset + i * 4 + 1];
+                        const bytes = self.chunk.code.items[operandLength + self.offset + i * 4 + 2 ..][0..3];
                         const idx = std.mem.readInt(u24, bytes, .big);
                         try writer.print(" ~ upvalue {s} [{d}]", .{ if (isLocal == 1) "<local>" else "", idx });
                     }
@@ -223,10 +228,14 @@ pub const Chunk = struct {
             .OP_CONSTANT, .OP_CALL, .OP_DEFINE_GLOBAL, .OP_GET_GLOBAL, .OP_SET_GLOBAL => 2,
             .OP_CONSTANT_LONG, .OP_DEFINE_GLOBAL_LONG, .OP_GET_LOCAL, .OP_SET_LOCAL, .OP_GET_GLOBAL_LONG, .OP_SET_GLOBAL_LONG, .OP_GET_UPVALUE, .OP_SET_UPVALUE => 4,
             .OP_JUMP_IF_FALSE, .OP_JUMP, .OP_LOOP => 3,
-            .OP_CLOSURE => {
-                const idx = self.code.items[offset + 1];
+            .OP_CLOSURE, .OP_CLOSURE_LONG => {
+                const operandLength: usize = if (op == .OP_CLOSURE) 1 else 3;
+                const idx = if (op == .OP_CLOSURE)
+                    self.code.items[offset + 1]
+                else
+                    std.mem.readInt(u24, self.code.items[offset + 1 ..][0..3], .big);
                 const upvalueCount = value_mod.asFunction(self.data.items[idx]).upvalueCount;
-                return 2 + upvalueCount * 4;
+                return 1 + operandLength + upvalueCount * 4;
             },
             else => 1,
         };

@@ -108,7 +108,7 @@ test "global operand widths at constant indices 255 and 256" {
         defer compiler.deinit();
 
         const function = try compiler.compile();
-        const chunk = &function.data.function.chunk;
+        const chunk = &function.chunk;
         const expected = if (index == 255)
             [_]chunk_mod.OpCode{ .OP_DEFINE_GLOBAL, .OP_SET_GLOBAL, .OP_GET_GLOBAL }
         else
@@ -135,6 +135,39 @@ test "global operand widths at constant indices 255 and 256" {
         try std.testing.expectEqual(null, try vm.startScript(function));
         try std.testing.expectEqual(InterpretResult.OK, try vm.run());
         try std.testing.expect(vm.globals.get("target").?.bool);
+    }
+}
+
+test "closure constant indices at and beyond the one-byte limit" {
+    // Upvalue allocations currently rely on arena cleanup.
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    for ([_]usize{ 255, 256 }) |constantCount| {
+        var source: std.ArrayList(u8) = .empty;
+        defer source.deinit(std.testing.allocator);
+        try source.appendSlice(std.testing.allocator, "fun outer() { var captured = 42;");
+        // The captured local's initializer occupies constant slot zero.
+        for (0..constantCount - 1) |_| {
+            try source.appendSlice(std.testing.allocator, "0;");
+        }
+        try source.appendSlice(std.testing.allocator,
+            \\fun inner() { return captured; }
+            \\return inner;
+            \\}
+            \\var closure = outer();
+            \\if (closure() != 42) missing();
+        );
+        try source.append(std.testing.allocator, 0);
+
+        var scanner = Scanner.init(source.items.ptr);
+        var vm = try VM.init(std.testing.io, arena.allocator());
+        defer vm.deinit();
+        var compiler = try Compiler.init(std.testing.io, arena.allocator(), &scanner, &vm, null, FunctionType.SCRIPT);
+        defer compiler.deinit();
+
+        const function = try compiler.compile();
+        try std.testing.expectEqual(null, try vm.startScript(function));
+        try std.testing.expectEqual(InterpretResult.OK, try vm.run());
     }
 }
 

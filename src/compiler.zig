@@ -259,11 +259,10 @@ pub const Compiler = struct {
         const value = try inner.fun();
 
         const i = try self.makeConstant(value);
-        if (i < 0xFF) {
+        if (i <= 0xFF) {
             try self.emitOpWithByteOperand(OpCode.OP_CLOSURE, @intCast(i));
         } else {
-            // TODO: this needs a separate op code.
-            try self.emitOpWithMediumOperand(OpCode.OP_CLOSURE, i);
+            try self.emitOpWithMediumOperand(OpCode.OP_CLOSURE_LONG, i);
         }
         for (0..inner.functionObject.upvalueCount) |j| {
             try self.emitByte(if (inner.upvalues[j].isLocal) 1 else 0);

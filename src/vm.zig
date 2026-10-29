@@ -323,8 +323,12 @@ pub const VM = struct {
                     const v = self.stack.pop().?;
                     try self.printProgramValue(v);
                 },
-                OpCode.OP_CLOSURE => {
-                    const f = value.asFunction(self.readConstant(&ip, constants));
+                OpCode.OP_CLOSURE, OpCode.OP_CLOSURE_LONG => {
+                    const functionValue = if (instruction == .OP_CLOSURE)
+                        self.readConstant(&ip, constants)
+                    else
+                        constants[self.readMedium(&ip)];
+                    const f = value.asFunction(functionValue);
                     const c = try self.heap.createClosure(f);
 
                     for (0..f.upvalueCount) |i| {
