@@ -604,7 +604,7 @@ pub const Compiler = struct {
         if (self.scopeDepth > 0) {
             return;
         }
-        try self.emitOpWithMediumOperand(OpCode.OP_DEFINE_GLOBAL, global);
+        try self.emitConstantOperand(.OP_DEFINE_GLOBAL, .OP_DEFINE_GLOBAL_LONG, global);
     }
 
     fn printStatement(self: *Compiler) !void {
@@ -693,7 +693,11 @@ pub const Compiler = struct {
             break :op setOp;
         } else getOp;
 
-        try self.emitOpWithMediumOperand(op, arg.?);
+        switch (op) {
+            .OP_GET_GLOBAL => try self.emitConstantOperand(op, .OP_GET_GLOBAL_LONG, arg.?),
+            .OP_SET_GLOBAL => try self.emitConstantOperand(op, .OP_SET_GLOBAL_LONG, arg.?),
+            else => try self.emitOpWithMediumOperand(op, arg.?),
+        }
     }
 
     fn resolveLocal(self: *Compiler, name: []const u8) ?u24 {
@@ -889,15 +893,14 @@ pub const Compiler = struct {
 
     fn emitConstant(self: *Compiler, value: Value) !void {
         const index = try self.makeConstant(value);
+        try self.emitConstantOperand(.OP_CONSTANT, .OP_CONSTANT_LONG, index);
+    }
 
+    fn emitConstantOperand(self: *Compiler, short: OpCode, long: OpCode, index: u24) !void {
         if (index <= 0xFF) {
-            self.traceEmit(OpCode.OP_CONSTANT, index);
-            try self.emitByte(@intFromEnum(OpCode.OP_CONSTANT));
-            try self.emitByte(@intCast(index));
+            try self.emitOpWithByteOperand(short, @intCast(index));
         } else {
-            self.traceEmit(OpCode.OP_CONSTANT_LONG, index);
-            try self.emitByte(@intFromEnum(OpCode.OP_CONSTANT_LONG));
-            try self.emitMedium(index);
+            try self.emitOpWithMediumOperand(long, index);
         }
     }
 

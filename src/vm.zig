@@ -368,13 +368,18 @@ pub const VM = struct {
                     code = frame.closure.function.chunk.code.items.ptr;
                     ip = frame.ip;
                 },
-                OpCode.OP_DEFINE_GLOBAL => {
-                    // TODO: We globals shouldn't always require a long constant slot.
-                    const identifier = self.readLongConstant(&ip, constants);
+                OpCode.OP_DEFINE_GLOBAL, OpCode.OP_DEFINE_GLOBAL_LONG => {
+                    const identifier = if (instruction == .OP_DEFINE_GLOBAL)
+                        self.readConstant(&ip, constants)
+                    else
+                        self.readLongConstant(&ip, constants);
                     try self.globals.put(identifier.obj.data.str.chars, self.stack.pop().?);
                 },
-                OpCode.OP_GET_GLOBAL => {
-                    const identfier = self.readLongConstant(&ip, constants);
+                OpCode.OP_GET_GLOBAL, OpCode.OP_GET_GLOBAL_LONG => {
+                    const identfier = if (instruction == .OP_GET_GLOBAL)
+                        self.readConstant(&ip, constants)
+                    else
+                        self.readLongConstant(&ip, constants);
                     const v = self.globals.get(identfier.obj.data.str.chars);
 
                     if (v == null) {
@@ -383,8 +388,11 @@ pub const VM = struct {
                         try self.stack.append(v.?);
                     }
                 },
-                OpCode.OP_SET_GLOBAL => {
-                    const identifier = self.readLongConstant(&ip, constants);
+                OpCode.OP_SET_GLOBAL, OpCode.OP_SET_GLOBAL_LONG => {
+                    const identifier = if (instruction == .OP_SET_GLOBAL)
+                        self.readConstant(&ip, constants)
+                    else
+                        self.readLongConstant(&ip, constants);
                     const name = identifier.obj.data.str.chars;
                     if (self.globals.contains(name)) {
                         try self.globals.put(name, self.peekStack(0));

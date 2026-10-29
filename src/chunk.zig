@@ -28,8 +28,11 @@ pub const OpCode = enum(u8) {
     OP_POPN,
     OP_POPN_LONG,
     OP_DEFINE_GLOBAL,
+    OP_DEFINE_GLOBAL_LONG,
     OP_GET_GLOBAL,
+    OP_GET_GLOBAL_LONG,
     OP_SET_GLOBAL,
+    OP_SET_GLOBAL_LONG,
     OP_GET_LOCAL,
     OP_SET_LOCAL,
     OP_GET_UPVALUE,
@@ -69,11 +72,11 @@ pub const Chunk = struct {
                     const n = std.mem.readInt(u24, bytes, .big);
                     try writer.print("{s} [{d}]", .{ name, n });
                 },
-                .OP_CONSTANT => {
+                .OP_CONSTANT, .OP_DEFINE_GLOBAL, .OP_GET_GLOBAL, .OP_SET_GLOBAL => {
                     const index = self.chunk.code.items[self.offset + 1];
                     try writer.print("{s} [{d}] {f}", .{ name, index, value_mod.format(self.chunk.data.items[index]) });
                 },
-                .OP_CONSTANT_LONG, .OP_DEFINE_GLOBAL, .OP_GET_GLOBAL, .OP_SET_GLOBAL => {
+                .OP_CONSTANT_LONG, .OP_DEFINE_GLOBAL_LONG, .OP_GET_GLOBAL_LONG, .OP_SET_GLOBAL_LONG => {
                     const bytes = self.chunk.code.items[self.offset + 1 ..][0..3];
                     const index = std.mem.readInt(u24, bytes, .big);
                     try writer.print("{s} [{d}] {f}", .{ name, index, value_mod.format(self.chunk.data.items[index]) });
@@ -217,8 +220,8 @@ pub const Chunk = struct {
     pub fn instructionLength(self: *const Chunk, offset: usize) usize {
         const op = std.enums.fromInt(OpCode, self.code.items[offset]) orelse return 1;
         return switch (op) {
-            .OP_CONSTANT, .OP_CALL => 2,
-            .OP_CONSTANT_LONG, .OP_DEFINE_GLOBAL, .OP_GET_LOCAL, .OP_SET_LOCAL, .OP_GET_GLOBAL, .OP_SET_GLOBAL, .OP_GET_UPVALUE, .OP_SET_UPVALUE => 4,
+            .OP_CONSTANT, .OP_CALL, .OP_DEFINE_GLOBAL, .OP_GET_GLOBAL, .OP_SET_GLOBAL => 2,
+            .OP_CONSTANT_LONG, .OP_DEFINE_GLOBAL_LONG, .OP_GET_LOCAL, .OP_SET_LOCAL, .OP_GET_GLOBAL_LONG, .OP_SET_GLOBAL_LONG, .OP_GET_UPVALUE, .OP_SET_UPVALUE => 4,
             .OP_JUMP_IF_FALSE, .OP_JUMP, .OP_LOOP => 3,
             .OP_CLOSURE => {
                 const idx = self.code.items[offset + 1];

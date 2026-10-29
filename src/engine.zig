@@ -93,6 +93,51 @@ fn executeTestFile(allocator: std.mem.Allocator, filename: []const u8) !Interpre
     return try vm.run();
 }
 
+test "global operand widths at constant indices 255 and 256" {
+    const allocator = std.testing.allocator;
+    for ([_]usize{ 255, 256 }) |index| {
+        var source: std.Io.Writer.Allocating = .init(allocator);
+        defer source.deinit();
+        for (0..index) |_| try source.writer.writeAll("0;");
+        try source.writer.writeAll("var target = nil; target = true; target;\x00");
+
+        var scanner = Scanner.init(source.written().ptr);
+        var vm = try VM.init(std.testing.io, allocator);
+        defer vm.deinit();
+        var compiler = try Compiler.init(std.testing.io, allocator, &scanner, &vm, null, FunctionType.SCRIPT);
+        defer compiler.deinit();
+
+        const function = try compiler.compile();
+        const chunk = &function.data.function.chunk;
+        const expected = if (index == 255)
+            [_]chunk_mod.OpCode{ .OP_DEFINE_GLOBAL, .OP_SET_GLOBAL, .OP_GET_GLOBAL }
+        else
+            [_]chunk_mod.OpCode{ .OP_DEFINE_GLOBAL_LONG, .OP_SET_GLOBAL_LONG, .OP_GET_GLOBAL_LONG };
+        var seen: usize = 0;
+        var offset: usize = 0;
+        while (offset < chunk.code.items.len) : (offset += chunk.instructionLength(offset)) {
+            const op: chunk_mod.OpCode = @enumFromInt(chunk.code.items[offset]);
+            switch (op) {
+                .OP_DEFINE_GLOBAL, .OP_DEFINE_GLOBAL_LONG, .OP_GET_GLOBAL, .OP_GET_GLOBAL_LONG, .OP_SET_GLOBAL, .OP_SET_GLOBAL_LONG => {
+                    try std.testing.expect(seen < expected.len);
+                    try std.testing.expectEqual(expected[seen], op);
+                    const decoded = if (index == 255)
+                        chunk.code.items[offset + 1]
+                    else
+                        std.mem.readInt(u24, chunk.code.items[offset + 1 ..][0..3], .big);
+                    try std.testing.expectEqual(index, decoded);
+                    seen += 1;
+                },
+                else => {},
+            }
+        }
+        try std.testing.expectEqual(expected.len, seen);
+        try std.testing.expectEqual(null, try vm.startScript(function));
+        try std.testing.expectEqual(InterpretResult.OK, try vm.run());
+        try std.testing.expect(vm.globals.get("target").?.bool);
+    }
+}
+
 test "001 simple expression" {
     const result = try executeTestFile(std.testing.allocator, "001_simple_expression.lox");
     try std.testing.expect(result == InterpretResult.OK);
