@@ -64,10 +64,62 @@ const DEBUG_VM = config.debug_vm;
 const DEBUG_STACK_LIMIT = 8;
 const DEBUG_INSTRUCTION_LIMIT = 200;
 
+const Stack = struct {
+    // Open upvalues point into this storage. Do not move the VM while it is running.
+    values: [STACK_MAX]Value = undefined,
+    len: usize = 0,
+
+    fn append(self: *Stack, v: Value) error{StackOverflow}!void {
+        if (self.len == STACK_MAX) return error.StackOverflow;
+        self.values[self.len] = v;
+        self.len += 1;
+    }
+
+    fn pop(self: *Stack) ?Value {
+        if (self.len == 0) return null;
+        self.len -= 1;
+        return self.values[self.len];
+    }
+
+    fn getLast(self: *const Stack) Value {
+        return self.values[self.len - 1];
+    }
+
+    fn clearRetainingCapacity(self: *Stack) void {
+        self.len = 0;
+    }
+
+    fn shrinkRetainingCapacity(self: *Stack, len: usize) void {
+        std.debug.assert(len <= self.len);
+        self.len = len;
+    }
+};
+
+test "fixed stack preserves captured slots and rejects overflow" {
+    var stack: Stack = .{};
+    try stack.append(value.numberValue(42));
+    const captured = &stack.values[0];
+
+    while (stack.len < STACK_MAX) {
+        try stack.append(value.nilValue());
+    }
+    try std.testing.expectError(error.StackOverflow, stack.append(value.nilValue()));
+    try std.testing.expectEqual(@as(usize, STACK_MAX), stack.len);
+    try std.testing.expect(captured == &stack.values[0]);
+    try std.testing.expectEqual(@as(f64, 42), captured.number);
+
+    stack.shrinkRetainingCapacity(1);
+    try std.testing.expectEqual(@as(f64, 42), stack.pop().?.number);
+    try std.testing.expectEqual(@as(?Value, null), stack.pop());
+    try stack.append(value.boolValue(true));
+    stack.clearRetainingCapacity();
+    try std.testing.expectEqual(@as(usize, 0), stack.len);
+}
+
 pub const VM = struct {
     io: std.Io,
     allocator: std.mem.Allocator,
-    stack: std.ArrayList(Value),
+    stack: Stack,
     heap: Heap,
     globals: std.StringHashMap(Value),
     frames: [FRAMES_MAX]CallFrame = undefined,
@@ -78,7 +130,7 @@ pub const VM = struct {
         var vm = VM{
             .io = io,
             .allocator = allocator,
-            .stack = std.ArrayList(Value).empty,
+            .stack = .{},
             .heap = Heap.init(allocator),
             .globals = std.StringHashMap(Value).init(allocator),
             .frameCount = 0,
@@ -94,7 +146,6 @@ pub const VM = struct {
     }
 
     pub fn deinit(self: *VM) void {
-        self.stack.deinit(self.allocator);
         self.globals.deinit();
         self.heap.deinit();
     }
@@ -108,29 +159,42 @@ pub const VM = struct {
         var frame = &self.frames[self.frameCount];
         frame.function = function;
         frame.ip = function.chunk.code.items.ptr;
-        frame.slots = self.stack.items.len;
+        frame.slots = self.stack.len;
         self.frameCount += 1;
     }
 
     pub fn startScript(self: *VM, functionObject: *Obj) !?RuntimeFault {
         const function = functionObject.data.function;
         const closure = try self.heap.createClosure(function);
-        try self.stack.append(self.allocator, value.objValue(closure));
+        try self.stack.append(value.objValue(closure));
         return self.call(closure.data.closure, 0);
     }
 
     pub fn run(self: *VM) !InterpretResult {
+        const fault = self.runInstructions() catch |err| switch (err) {
+            error.StackOverflow => RuntimeFault.stack_overflow,
+            else => return err,
+        };
+        if (fault) |runtimeFault| {
+            self.runtimeError(runtimeFault);
+            return InterpretResult.RUNTIME_ERROR;
+        }
+        return InterpretResult.OK;
+    }
+
+    fn runInstructions(self: *VM) !?RuntimeFault {
         var frame = &self.frames[self.frameCount - 1];
         var constants = frame.closure.function.chunk.data.items;
         var code = frame.closure.function.chunk.code.items.ptr;
         var ip = frame.ip;
+        defer frame.ip = ip;
 
         if (comptime DEBUG_VM) {
             std.debug.print("== VM execution ==\n", .{});
         }
 
         var instruction_count: usize = 0;
-        const runtimeFault: RuntimeFault = dispatch: while (true) {
+        while (true) {
             const instruction_offset = @intFromPtr(ip) - @intFromPtr(code);
             if (comptime DEBUG_VM) {
                 if (instruction_count < DEBUG_INSTRUCTION_LIMIT) {
@@ -149,93 +213,93 @@ pub const VM = struct {
             switch (instruction) {
                 OpCode.OP_RETURN => {
                     const result = self.stack.pop().?;
-                    self.closeUpvalues(&self.stack.items[frame.slots]);
+                    self.closeUpvalues(&self.stack.values[frame.slots]);
                     self.frameCount -= 1;
                     if (self.frameCount == 0) {
                         _ = self.stack.pop().?;
-                        return InterpretResult.OK;
+                        return null;
                     }
 
                     self.stack.shrinkRetainingCapacity(frame.slots);
-                    try self.stack.append(self.allocator, result);
+                    try self.stack.append(result);
                     frame = &self.frames[self.frameCount - 1];
                     constants = frame.closure.function.chunk.data.items;
                     code = frame.closure.function.chunk.code.items.ptr;
                     ip = frame.ip;
                 },
                 OpCode.OP_TRUE => {
-                    try self.stack.append(self.allocator, value.boolValue(true));
+                    try self.stack.append(value.boolValue(true));
                 },
                 OpCode.OP_FALSE => {
-                    try self.stack.append(self.allocator, value.boolValue(false));
+                    try self.stack.append(value.boolValue(false));
                 },
                 OpCode.OP_NIL => {
-                    try self.stack.append(self.allocator, value.nilValue());
+                    try self.stack.append(value.nilValue());
                 },
                 OpCode.OP_CONSTANT => {
                     const constant = self.readConstant(&ip, constants);
-                    try self.stack.append(self.allocator, constant);
+                    try self.stack.append(constant);
                 },
                 OpCode.OP_CONSTANT_LONG => {
                     const constant = self.readLongConstant(&ip, constants);
-                    try self.stack.append(self.allocator, constant);
+                    try self.stack.append(constant);
                 },
                 OpCode.OP_NOT => {
-                    try self.stack.append(self.allocator, value.boolValue(isFalsey(self.stack.pop().?)));
+                    try self.stack.append(value.boolValue(isFalsey(self.stack.pop().?)));
                 },
                 OpCode.OP_NEGATE => {
                     switch (self.stack.getLast()) {
                         .number => {
-                            self.stack.items[self.stack.items.len - 1].number *= -1;
+                            self.stack.values[self.stack.len - 1].number *= -1;
                         },
                         else => {
-                            break :dispatch .operand_must_be_number;
+                            return .operand_must_be_number;
                         },
                     }
                 },
                 OpCode.OP_ADD => {
                     if (try self.binaryOp(BinaryOperator.PLUS)) |err| {
-                        break :dispatch err;
+                        return err;
                     }
                 },
                 OpCode.OP_SUBTRACT => {
                     if (try self.binaryOp(BinaryOperator.SUBTRACT)) |err| {
-                        break :dispatch err;
+                        return err;
                     }
                 },
                 OpCode.OP_MULTIPLY => {
                     if (try self.binaryOp(BinaryOperator.MULTIPLY)) |err| {
-                        break :dispatch err;
+                        return err;
                     }
                 },
                 OpCode.OP_DIVIDE => {
                     if (try self.binaryOp(BinaryOperator.DIVIDE)) |err| {
-                        break :dispatch err;
+                        return err;
                     }
                 },
                 OpCode.OP_AND => {
                     const b = self.stack.pop().?;
                     const a = self.stack.pop().?;
-                    try self.stack.append(self.allocator, value.boolValue(isTruthy(a) and isTruthy(b)));
+                    try self.stack.append(value.boolValue(isTruthy(a) and isTruthy(b)));
                 },
                 OpCode.OP_OR => {
                     const b = self.stack.pop().?;
                     const a = self.stack.pop().?;
-                    try self.stack.append(self.allocator, value.boolValue(isTruthy(a) or isTruthy(b)));
+                    try self.stack.append(value.boolValue(isTruthy(a) or isTruthy(b)));
                 },
                 OpCode.OP_EQUALS => {
                     const b = self.stack.pop().?;
                     const a = self.stack.pop().?;
-                    try self.stack.append(self.allocator, value.boolValue(self.valuesEqual(a, b)));
+                    try self.stack.append(value.boolValue(self.valuesEqual(a, b)));
                 },
                 OpCode.OP_LESS => {
                     if (try self.binaryOp(BinaryOperator.LESS)) |err| {
-                        break :dispatch err;
+                        return err;
                     }
                 },
                 OpCode.OP_GREATER => {
                     if (try self.binaryOp(BinaryOperator.GREATER)) |err| {
-                        break :dispatch err;
+                        return err;
                     }
                 },
                 OpCode.OP_POP => {
@@ -255,7 +319,7 @@ pub const VM = struct {
                 },
                 OpCode.OP_DUP => {
                     const v = self.peekStack(0);
-                    try self.stack.append(self.allocator, v);
+                    try self.stack.append(v);
                 },
                 OpCode.OP_PRINT => {
                     const v = self.stack.pop().?;
@@ -270,24 +334,24 @@ pub const VM = struct {
                         const index = self.readMedium(&ip);
 
                         if (isLocal == 1) {
-                            c.data.closure.upvalues[i] = try self.captureUpvalue(&self.stack.items[frame.slots + index]);
+                            c.data.closure.upvalues[i] = try self.captureUpvalue(&self.stack.values[frame.slots + index]);
                         } else {
                             c.data.closure.upvalues[i] = frame.closure.upvalues[i];
                         }
                     }
 
-                    try self.stack.append(self.allocator, value.objValue(c));
+                    try self.stack.append(value.objValue(c));
                 },
                 OpCode.OP_GET_UPVALUE => {
                     const slot = self.readMedium(&ip);
-                    try self.stack.append(self.allocator, frame.closure.upvalues[slot].location.*);
+                    try self.stack.append(frame.closure.upvalues[slot].location.*);
                 },
                 OpCode.OP_SET_UPVALUE => {
                     const slot = self.readMedium(&ip);
                     frame.closure.upvalues[slot].location.* = self.peekStack(0);
                 },
                 OpCode.OP_CLOSE_UPVALUE => {
-                    self.closeUpvalues(&self.stack.items[self.stack.items.len - 1]);
+                    self.closeUpvalues(&self.stack.values[self.stack.len - 1]);
                     _ = self.stack.pop();
                 },
                 OpCode.OP_CALL => {
@@ -297,7 +361,7 @@ pub const VM = struct {
                     frame.ip = ip;
 
                     if (try self.callValue(self.peekStack(argCount), argCount)) |err| {
-                        break :dispatch err;
+                        return err;
                     }
                     frame = &self.frames[self.frameCount - 1];
                     constants = frame.closure.function.chunk.data.items;
@@ -314,9 +378,9 @@ pub const VM = struct {
                     const v = self.globals.get(identfier.obj.data.str.chars);
 
                     if (v == null) {
-                        break :dispatch .{ .undefined_variable = identfier.obj.data.str.chars };
+                        return .{ .undefined_variable = identfier.obj.data.str.chars };
                     } else {
-                        try self.stack.append(self.allocator, v.?);
+                        try self.stack.append(v.?);
                     }
                 },
                 OpCode.OP_SET_GLOBAL => {
@@ -325,16 +389,16 @@ pub const VM = struct {
                     if (self.globals.contains(name)) {
                         try self.globals.put(name, self.peekStack(0));
                     } else {
-                        break :dispatch .{ .undefined_variable = name };
+                        return .{ .undefined_variable = name };
                     }
                 },
                 OpCode.OP_GET_LOCAL => {
                     const slot = self.readMedium(&ip);
-                    try self.stack.append(self.allocator, self.stack.items[frame.slots + slot]);
+                    try self.stack.append(self.stack.values[frame.slots + slot]);
                 },
                 OpCode.OP_SET_LOCAL => {
                     const slot = self.readMedium(&ip);
-                    self.stack.items[frame.slots + slot] = self.peekStack(0);
+                    self.stack.values[frame.slots + slot] = self.peekStack(0);
                 },
                 OpCode.OP_JUMP_IF_FALSE => {
                     const offset = self.readShort(&ip);
@@ -351,14 +415,10 @@ pub const VM = struct {
                     ip -= offset;
                 },
                 OpCode.ILLEGAL => {
-                    break :dispatch .{ .illegal_opcode = instruction_byte };
+                    return .{ .illegal_opcode = instruction_byte };
                 },
             }
-        };
-
-        frame.ip = ip;
-        self.runtimeError(runtimeFault);
-        return InterpretResult.RUNTIME_ERROR;
+        }
     }
 
     inline fn closeUpvalues(self: *VM, last: *Value) void {
@@ -431,7 +491,7 @@ pub const VM = struct {
                 try self.concatenate();
             } else if (self.checkNumberOperands()) {
                 const result = value.numberValue(self.stack.pop().?.number + self.stack.pop().?.number);
-                try self.stack.append(self.allocator, result);
+                try self.stack.append(result);
             } else {
                 return .operands_must_be_numbers_or_strings;
             }
@@ -448,7 +508,7 @@ pub const VM = struct {
                 .LESS => value.boolValue(a < b),
                 .GREATER => value.boolValue(a > b),
             };
-            try self.stack.append(self.allocator, result);
+            try self.stack.append(result);
         } else {
             return .operands_must_be_numbers;
         }
@@ -463,7 +523,7 @@ pub const VM = struct {
         const chars = try std.mem.concat(self.allocator, u8, &[_][]const u8{ a, b });
         const v = value.objValue(try self.heap.takeString(chars));
 
-        try self.stack.append(self.allocator, v);
+        try self.stack.append(v);
     }
 
     inline fn valuesEqual(_: *VM, a: Value, b: Value) bool {
@@ -503,10 +563,10 @@ pub const VM = struct {
                     .actual = argCount,
                 } };
             }
-            const firstArgumentOnStackOffset = self.stack.items.len - argCount;
-            const result = try native.function(self, argCount, self.stack.items[firstArgumentOnStackOffset..]);
+            const firstArgumentOnStackOffset = self.stack.len - argCount;
+            const result = try native.function(self, argCount, self.stack.values[firstArgumentOnStackOffset..self.stack.len]);
             self.stack.shrinkRetainingCapacity(firstArgumentOnStackOffset - 1);
-            try self.stack.append(self.allocator, result);
+            try self.stack.append(result);
             return null;
         }
 
@@ -523,14 +583,14 @@ pub const VM = struct {
         frame.closure = closure;
         frame.function = closure.function;
         frame.ip = closure.function.chunk.code.items.ptr;
-        frame.slots = self.stack.items.len - argCount - 1;
+        frame.slots = self.stack.len - argCount - 1;
         return null;
     }
 
     fn defineNative(self: *VM, name: []const u8, arity: u8, native: value.NativeFn) !void {
-        try self.stack.append(self.allocator, value.objValue(try self.heap.copyString(name)));
-        try self.stack.append(self.allocator, value.objValue(try self.heap.createNative(arity, native)));
-        try self.globals.put(value.asStr(self.stack.items[0]), self.stack.items[1]);
+        try self.stack.append(value.objValue(try self.heap.copyString(name)));
+        try self.stack.append(value.objValue(try self.heap.createNative(arity, native)));
+        try self.globals.put(value.asStr(self.stack.values[0]), self.stack.values[1]);
         _ = self.stack.pop();
         _ = self.stack.pop();
     }
@@ -544,7 +604,7 @@ pub const VM = struct {
     }
 
     fn peekStack(self: *VM, i: usize) Value {
-        return self.stack.items[self.stack.items.len - 1 - i];
+        return self.stack.values[self.stack.len - 1 - i];
     }
 
     fn printProgramValue(self: *VM, v: Value) !void {
@@ -650,7 +710,7 @@ const ExecutionTrace = struct {
             instruction_writer.buffered(),
         });
 
-        const stack = self.vm.stack.items;
+        const stack = self.vm.stack.values[0..self.vm.stack.len];
         if (stack.len <= DEBUG_STACK_LIMIT) {
             try writeStackValues(writer, stack);
         } else {
@@ -679,6 +739,23 @@ const ExecutionTrace = struct {
     }
 };
 
+test "stack overflow is a runtime fault and resets the VM" {
+    var vm = try VM.init(std.testing.io, std.testing.allocator);
+    defer vm.deinit();
+
+    const name = try vm.heap.copyString("overflow");
+    const function = try vm.heap.createFunction(name.data.str);
+    try function.data.function.chunk.writeChunk(@intFromEnum(OpCode.OP_NIL), 7);
+    try std.testing.expectEqual(@as(?RuntimeFault, null), try vm.startScript(function));
+    while (vm.stack.len < STACK_MAX) {
+        try vm.stack.append(value.nilValue());
+    }
+
+    try std.testing.expectEqual(InterpretResult.RUNTIME_ERROR, try vm.run());
+    try std.testing.expectEqual(@as(usize, 0), vm.stack.len);
+    try std.testing.expectEqual(@as(usize, 0), vm.frameCount);
+}
+
 test "execution trace labels instruction and pre-execution stack" {
     const function = try ObjFunction.create(std.testing.allocator);
     defer function.destroy(std.testing.allocator);
@@ -689,8 +766,8 @@ test "execution trace labels instruction and pre-execution stack" {
     defer vm.deinit();
     vm.appendFrame(function);
     vm.frame = &vm.frames[vm.frameCount - 1];
-    try vm.stack.append(std.testing.allocator, value.numberValue(1));
-    try vm.stack.append(std.testing.allocator, value.numberValue(2));
+    try vm.stack.append(value.numberValue(1));
+    try vm.stack.append(value.numberValue(2));
 
     try std.testing.expectFmt(
         "[vm] 0000 line    4 | ADD                              | stack [1, 2] <- top\n",
@@ -711,7 +788,7 @@ test "execution trace shows branch destination and decision" {
     defer vm.deinit();
     vm.appendFrame(function);
     vm.frame = &vm.frames[vm.frameCount - 1];
-    try vm.stack.append(std.testing.allocator, value.boolValue(false));
+    try vm.stack.append(value.boolValue(false));
 
     try std.testing.expectFmt(
         "[vm] 0000 line    3 | JUMP_IF_FALSE -> 0005            | stack [false] <- top | taken\n",
