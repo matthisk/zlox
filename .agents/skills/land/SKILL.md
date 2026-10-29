@@ -51,9 +51,17 @@ Stop for genuine blockers, ambiguous scope, or unsafe changes.
    `-m` messages and `GIT_EDITOR=true` for Git commands that might open an
    editor. Do not disable signing to make a commit succeed.
 4. Compare the candidate against the recorded destination tip. Ensure every
-   commit and change that would land belongs to the request. If the destination
-   is not an ancestor of the candidate, merge the recorded tip into the
-   landing branch non-interactively. Do not rewrite destination history.
+   commit and change that would land belongs to the request. Keep history
+   linear: if the destination is not an ancestor of the candidate, rebase the
+   landing branch onto the recorded tip with `GIT_EDITOR=true git rebase
+   <recorded-tip>`, not a merge. If this would rewrite shared commits, create
+   a uniquely named temporary landing branch first and rebase that instead.
+   Do not rewrite destination history or update shared branches by force.
+   Before verification, require `git rev-list --merges <recorded-tip>..HEAD`
+   to produce no output. If the candidate already contains merge commits,
+   rebase its requested commits onto the recorded tip on a temporary landing
+   branch without `--rebase-merges`, then inspect the resulting diff to ensure
+   the intended changes, including conflict resolutions, are preserved.
 5. Resolve conflicts automatically when the intended result is clear,
    preserving unrelated work. For ambiguous conflicts, stop and describe the
    conflict for the user; do not guess. Never force-push, reset the destination,
@@ -97,8 +105,9 @@ required test and format checks above.
 1. Record the verified candidate commit ID and ensure no unexpected workspace
    edits appeared during validation.
 2. Immediately recheck the destination branch, cleanliness, and tip. If its
-   tip advanced, fetch again, integrate the new tip in the workspace, and
-   repeat verification. If it became dirty or changed branches, stop.
+   tip advanced, fetch again, repeat the linear-history preparation against
+   the new tip in the workspace, and repeat verification. If it became dirty
+   or changed branches, stop.
 3. Transfer the verified candidate to the destination object database by
    fetching its exact commit from the workspace repository. This is a local
    fetch, not publication. Do not update destination `main` through a push
