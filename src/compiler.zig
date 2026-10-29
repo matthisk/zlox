@@ -359,25 +359,28 @@ pub const Compiler = struct {
         self.scopeDepth -= 1;
 
         // Pop all variables from this scope, as they are no longer available after scope end.
-        var n: u8 = 0;
-        while (self.locals.items.len >= 1 and self.locals.items[self.locals.items.len - 1].depth > self.scopeDepth) {
-            n += 1;
-            const l = self.locals.pop();
-            if (l != null and l.?.isCaptured) {
-                try self.emitOp(OpCode.OP_CLOSE_UPVALUE);
-            } else {
-                try self.emitOp(OpCode.OP_POP);
-            }
+        var scopeStart = self.locals.items.len;
+        var hasCaptured = false;
+        while (scopeStart > 0 and self.locals.items[scopeStart - 1].depth > self.scopeDepth) {
+            scopeStart -= 1;
+            hasCaptured = hasCaptured or self.locals.items[scopeStart].isCaptured;
         }
 
-        // TODO: now that we close over upvalues we can no longer use OP_POPN. We need a refactor.
-        //if (n < UINT8_COUNT) {
-        //    try self.emitOp(OpCode.OP_POPN);
-        //    try self.emitByte(n);
-        //} else {
-        //    try self.emitOp(OpCode.OP_POPN_LONG);
-        //    try self.emitMedium(n);
-        //}
+        const n = self.locals.items.len - scopeStart;
+        if (hasCaptured) {
+            // Close captured locals in stack order before their slots are discarded.
+            while (self.locals.items.len > scopeStart) {
+                const local = self.locals.pop().?;
+                try self.emitOp(if (local.isCaptured) OpCode.OP_CLOSE_UPVALUE else OpCode.OP_POP);
+            }
+        } else if (n > 0) {
+            if (n < UINT8_COUNT) {
+                try self.emitOpWithByteOperand(OpCode.OP_POPN, @intCast(n));
+            } else {
+                try self.emitOpWithMediumOperand(OpCode.OP_POPN_LONG, @intCast(n));
+            }
+            self.locals.shrinkRetainingCapacity(scopeStart);
+        }
     }
 
     fn block(self: *Compiler) !void {
@@ -1038,6 +1041,45 @@ fn toBytes(n: u24, buffer: *[3]u8) ![]const u8 {
 
 fn nextPrecedence(precedence: Precedence) Precedence {
     return @enumFromInt(@intFromEnum(precedence) + 1);
+}
+
+fn expectScopeCleanup(count: usize, captured: ?usize, expected: []const u8) !void {
+    var scanner = Scanner.init("".ptr);
+    var vm = try VM.init(std.testing.io, std.testing.allocator);
+    defer vm.deinit();
+    var compiler = try Compiler.init(std.testing.io, std.testing.allocator, &scanner, &vm, null, FunctionType.SCRIPT);
+    defer compiler.deinit();
+    compiler.previous.line = 1;
+    compiler.beginScope();
+    for (0..count) |i| {
+        try compiler.locals.append(std.testing.allocator, .{
+            .name = "",
+            .depth = compiler.scopeDepth,
+            .isCaptured = captured != null and captured.? == i,
+        });
+    }
+
+    try compiler.endScope();
+
+    try std.testing.expectEqualSlices(u8, expected, compiler.currentChunk().code.items);
+    try std.testing.expectEqual(1, compiler.locals.items.len);
+    try std.testing.expectEqual(0, compiler.scopeDepth);
+}
+
+test "scope cleanup batches uncaptured locals" {
+    try expectScopeCleanup(0, null, &.{});
+    try expectScopeCleanup(1, null, &.{ @intFromEnum(OpCode.OP_POPN), 1 });
+    try expectScopeCleanup(255, null, &.{ @intFromEnum(OpCode.OP_POPN), 255 });
+    try expectScopeCleanup(256, null, &.{ @intFromEnum(OpCode.OP_POPN_LONG), 0, 1, 0 });
+}
+
+test "scope cleanup closes captured locals in stack order" {
+    try expectScopeCleanup(1, 0, &.{@intFromEnum(OpCode.OP_CLOSE_UPVALUE)});
+    try expectScopeCleanup(3, 1, &.{
+        @intFromEnum(OpCode.OP_POP),
+        @intFromEnum(OpCode.OP_CLOSE_UPVALUE),
+        @intFromEnum(OpCode.OP_POP),
+    });
 }
 
 test "compiler trace is compact and readable" {
