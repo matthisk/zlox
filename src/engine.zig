@@ -4,7 +4,6 @@ const compiler_mod = @import("compiler.zig");
 const scanner_mod = @import("scanner.zig");
 const chunk_mod = @import("chunk.zig");
 
-const Chunk = chunk_mod.Chunk;
 const Scanner = scanner_mod.Scanner;
 const Compiler = compiler_mod.Compiler;
 const VM = vm_mod.VM;
@@ -63,15 +62,17 @@ fn loadTestFile(allocator: std.mem.Allocator, filename: []const u8) ![]u8 {
     const full_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ samples_dir, filename });
     defer allocator.free(full_path);
 
-    const file = std.fs.cwd().openFile(full_path, .{}) catch |err| {
+    const file = std.Io.Dir.cwd().openFile(std.testing.io, full_path, .{}) catch |err| {
         std.debug.print("Error opening test file '{s}': {}\n", .{ full_path, err });
         return err;
     };
-    defer file.close();
+    defer file.close(std.testing.io);
 
-    const file_size = try file.getEndPos();
+    const file_size = try file.length(std.testing.io);
     const source = try allocator.alloc(u8, file_size + 1);
-    _ = try file.readAll(source[0..file_size]);
+    errdefer allocator.free(source);
+    const bytes_read = try file.readPositionalAll(std.testing.io, source[0..file_size], 0);
+    try std.testing.expectEqual(file_size, bytes_read);
     source[file_size] = 0;
 
     return source;
@@ -81,14 +82,14 @@ fn executeTestFile(allocator: std.mem.Allocator, filename: []const u8) !Interpre
     const source = try loadTestFile(allocator, filename);
     defer allocator.free(source);
 
-    var chunk = Chunk.init(allocator);
     var scanner = Scanner.init(source.ptr);
-    var vm = VM.init(std.testing.io, allocator, &chunk);
-    var compiler = Compiler.init(std.testing.io, allocator, &scanner, &vm, null, FunctionType.SCRIPT);
-    defer chunk.deinit();
+    var vm = try VM.init(std.testing.io, allocator);
     defer vm.deinit();
+    var compiler = try Compiler.init(std.testing.io, allocator, &scanner, &vm, null, FunctionType.SCRIPT);
+    defer compiler.deinit();
 
-    try compiler.compile(&chunk);
+    const function = try compiler.compile();
+    try std.testing.expectEqual(null, try vm.startScript(function));
     return try vm.run();
 }
 
@@ -176,15 +177,14 @@ test "018 illegal assignment target" {
     const source = try loadTestFile(std.testing.allocator, "018_illegal_assignment_target.lox");
     defer std.testing.allocator.free(source);
 
-    var chunk = Chunk.init(std.testing.allocator);
     var scanner = Scanner.init(source.ptr);
-    var vm = VM.init(std.testing.io, std.testing.allocator, &chunk);
-    var compiler = Compiler.init(std.testing.io, std.testing.allocator, &scanner, &vm, null, FunctionType.SCRIPT);
-    defer chunk.deinit();
+    var vm = try VM.init(std.testing.io, std.testing.allocator);
     defer vm.deinit();
+    var compiler = try Compiler.init(std.testing.io, std.testing.allocator, &scanner, &vm, null, FunctionType.SCRIPT);
+    defer compiler.deinit();
 
     // This should fail to compile
-    try std.testing.expectError(error.CompileError, compiler.compile(&chunk));
+    try std.testing.expectError(error.ParseError, compiler.compile());
 }
 
 test "019 assignments" {

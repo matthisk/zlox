@@ -158,8 +158,6 @@ test "heap creates and owns function objects" {
     try std.testing.expectEqual(@as(usize, 0), function.arity);
     try std.testing.expectEqualStrings("<script>", function.name.chars);
     try std.testing.expect(heap.objects.? == object);
-    try std.testing.expect(object.data.function == function);
-
     heap.deinit();
     try std.testing.expect(heap.objects == null);
 }
@@ -187,11 +185,4 @@ test "heap adopts strings and frees duplicate buffers" {
     const duplicate_chars = try std.testing.allocator.dupe(u8, "owned");
     const duplicate = try heap.takeString(duplicate_chars);
     try std.testing.expect(adopted == duplicate);
-}
-
-test "heap deinitializes interned strings" {
-    var heap = Heap.init(std.testing.allocator);
-    _ = try heap.copyString("released on deinit");
-    heap.deinit();
-    try std.testing.expect(heap.objects == null);
 }

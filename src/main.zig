@@ -1,6 +1,18 @@
 const std = @import("std");
 const Engine = @import("engine.zig").Engine;
 
+comptime {
+    if (@import("builtin").is_test) {
+        _ = @import("engine.zig");
+        _ = @import("compiler.zig");
+        _ = @import("scanner.zig");
+        _ = @import("vm.zig");
+        _ = @import("chunk.zig");
+        _ = @import("heap.zig");
+        _ = @import("value.zig");
+    }
+}
+
 pub fn main(init: std.process.Init) !void {
     const allocator = init.arena.allocator();
 

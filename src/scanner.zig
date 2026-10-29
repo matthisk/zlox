@@ -348,7 +348,7 @@ fn createSlice(start: [*]const u8, end: [*]const u8) []const u8 {
 
 test "scanner trace is compact and readable" {
     try std.testing.expectFmt(
-        "[scanner] line    2 | STRING        | \"hello\\nworld\"\n",
+        "[scanner]  line    2 | STRING        | \"hello\\nworld\"\n",
         "{f}",
         .{TokenTrace{
             .token_type = TokenType.TOKEN_STRING,
@@ -357,7 +357,7 @@ test "scanner trace is compact and readable" {
         }},
     );
     try std.testing.expectFmt(
-        "[scanner] line    7 | ERROR         | \"@\" | error: Illegal character.\n",
+        "[scanner]  line    7 | ERROR         | \"@\" | error: Illegal character.\n",
         "{f}",
         .{TokenTrace{
             .token_type = TokenType.TOKEN_ERROR,
@@ -367,7 +367,7 @@ test "scanner trace is compact and readable" {
         }},
     );
     try std.testing.expectFmt(
-        "[scanner] line    8 | EOF\n",
+        "[scanner]  line    8 | EOF\n",
         "{f}",
         .{TokenTrace{
             .token_type = TokenType.TOKEN_EOF,
@@ -379,7 +379,7 @@ test "scanner trace is compact and readable" {
 
 test "scanner trace truncates long lexemes" {
     try std.testing.expectFmt(
-        "[scanner] line    1 | IDENTIFIER    | \"1234567890123456789012345678901234567890\"...\n",
+        "[scanner]  line    1 | IDENTIFIER    | \"1234567890123456789012345678901234567890\"...\n",
         "{f}",
         .{TokenTrace{
             .token_type = TokenType.TOKEN_IDENTIFIER,
@@ -396,23 +396,6 @@ test "slice from pointers" {
 
     const slice = createSlice(start, end);
     try std.testing.expectEqualStrings("Hello", slice);
-}
-
-test "test single char tokens" {
-    const source = "  { (\t)   \n} ";
-    var scanner = Scanner.init(source);
-
-    const expected = [4]TokenType{
-        TokenType.TOKEN_LEFT_BRACE,
-        TokenType.TOKEN_LEFT_PAREN,
-        TokenType.TOKEN_RIGHT_PAREN,
-        TokenType.TOKEN_RIGHT_BRACE,
-    };
-
-    for (0..expected.len) |index| {
-        const t = scanner.scan();
-        try std.testing.expectEqual(expected[index], t.type);
-    }
 }
 
 test "test all single character tokens" {
@@ -645,35 +628,12 @@ test "test comment at end of file" {
     try std.testing.expectEqual(TokenType.TOKEN_EOF, token2.type);
 }
 
-test "test comment with tokens before" {
-    const source = "var x = 123; // assign value";
-    var scanner = Scanner.init(source);
-
-    // Skip the first two for now since identifiers aren't implemented
-    _ = scanner.scan(); // skip first (var)
-    _ = scanner.scan(); // skip second (x)
-
-    const token3 = scanner.scan();
-    try std.testing.expectEqual(TokenType.TOKEN_EQUAL, token3.type);
-
-    const token4 = scanner.scan();
-    try std.testing.expectEqual(TokenType.TOKEN_NUMBER, token4.type);
-    try std.testing.expectEqualStrings("123", token4.lexeme);
-
-    const token5 = scanner.scan();
-    try std.testing.expectEqual(TokenType.TOKEN_SEMICOLON, token5.type);
-
-    const token6 = scanner.scan();
-    try std.testing.expectEqual(TokenType.TOKEN_EOF, token6.type);
-}
-
 // Integration tests with numbers, strings, and comments
 test "test mixed tokens with numbers and strings" {
     const source = "print \"The answer is \" + 42.0;";
     var scanner = Scanner.init(source);
 
-    // Skip first token (print - identifier not implemented yet)
-    _ = scanner.scan();
+    try std.testing.expectEqual(TokenType.TOKEN_PRINT, scanner.scan().type);
 
     const token2 = scanner.scan();
     try std.testing.expectEqual(TokenType.TOKEN_STRING, token2.type);

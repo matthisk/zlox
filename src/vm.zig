@@ -744,7 +744,7 @@ test "stack overflow is a runtime fault and resets the VM" {
     defer vm.deinit();
 
     const name = try vm.heap.copyString("overflow");
-    const function = try vm.heap.createFunction(name.data.str);
+    const function = try vm.heap.createFunction(&name.data.str);
     try function.data.function.chunk.writeChunk(@intFromEnum(OpCode.OP_NIL), 7);
     try std.testing.expectEqual(@as(?RuntimeFault, null), try vm.startScript(function));
     while (vm.stack.len < STACK_MAX) {
@@ -762,10 +762,11 @@ test "execution trace labels instruction and pre-execution stack" {
 
     try function.chunk.writeChunk(@intFromEnum(OpCode.OP_ADD), 4);
 
-    var vm = VM.init(std.testing.io, std.testing.allocator);
+    var vm = try VM.init(std.testing.io, std.testing.allocator);
     defer vm.deinit();
+    const closure = try vm.heap.createClosure(function);
     vm.appendFrame(function);
-    vm.frame = &vm.frames[vm.frameCount - 1];
+    vm.frames[vm.frameCount - 1].closure = closure.data.closure;
     try vm.stack.append(value.numberValue(1));
     try vm.stack.append(value.numberValue(2));
 
@@ -784,10 +785,11 @@ test "execution trace shows branch destination and decision" {
     try function.chunk.writeChunk(0, 3);
     try function.chunk.writeChunk(2, 3);
 
-    var vm = VM.init(std.testing.io, std.testing.allocator);
+    var vm = try VM.init(std.testing.io, std.testing.allocator);
     defer vm.deinit();
+    const closure = try vm.heap.createClosure(function);
     vm.appendFrame(function);
-    vm.frame = &vm.frames[vm.frameCount - 1];
+    vm.frames[vm.frameCount - 1].closure = closure.data.closure;
     try vm.stack.append(value.boolValue(false));
 
     try std.testing.expectFmt(

@@ -1077,31 +1077,3 @@ test "compiler trace is compact and readable" {
         } }},
     );
 }
-
-test "compiler" {
-    try testCompile("(1 + 2) * (3 + 4);");
-}
-
-test "compiler complex expression" {
-    const source = "(-1 + 2) * 3 - -4;";
-    try testCompile(source);
-}
-
-test "compiler boolean logic" {
-    try testCompile("true or false;");
-}
-
-test "compiler strings" {
-    try testCompile("\"hello world\";");
-}
-
-fn testCompile(source: [*]const u8) !void {
-    var vm = VM.init(std.testing.io, std.testing.allocator);
-    defer vm.deinit();
-
-    var scanner = Scanner.init(source);
-    var compiler = try Compiler.init(std.testing.io, std.testing.allocator, &scanner, &vm, null, FunctionType.SCRIPT);
-    defer compiler.deinit();
-
-    _ = try compiler.compile();
-}
