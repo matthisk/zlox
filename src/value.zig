@@ -10,24 +10,27 @@ pub const Value = union(enum) {
     bool: bool,
     number: f64,
     nil: void,
-    obj: *Obj,
+    string: *ObjStr,
+    function: *ObjFunction,
+    native: *ObjNative,
+    closure: *ObjClosure,
 };
 
 pub const ObjClosure = struct {
-    obj: *Obj,
+    obj: Obj = .{ .kind = .closure },
     function: *ObjFunction,
     upvalues: []*ObjUpvalue,
 };
 
 pub const ObjUpvalue = struct {
-    obj: ?*Obj = null,
+    obj: Obj = .{ .kind = .upvalue },
     location: *Value,
     closed: Value = .nil,
     next: ?*ObjUpvalue = null,
 };
 
 pub const ObjFunction = struct {
-    obj: *Obj,
+    obj: Obj = .{ .kind = .function },
     arity: usize,
     chunk: Chunk,
     upvalueCount: u8 = 0,
@@ -35,6 +38,7 @@ pub const ObjFunction = struct {
 
     pub fn create(allocator: std.mem.Allocator) !*ObjFunction {
         var objFn = try allocator.create(ObjFunction);
+        objFn.obj = .{ .kind = .function };
         objFn.arity = 0;
         objFn.upvalueCount = 0;
         objFn.chunk = Chunk.init(allocator);
@@ -48,47 +52,46 @@ pub const ObjFunction = struct {
 };
 
 pub const ObjNative = struct {
-    obj: *Obj,
+    obj: Obj = .{ .kind = .native },
     arity: usize,
     function: NativeFn,
 };
 
 pub const Obj = struct {
-    next: ?*Obj,
-    data: ObjData,
+    next: ?*Obj = null,
+    kind: enum { str, function, native, closure, upvalue },
 
     pub fn destroy(self: *Obj, allocator: std.mem.Allocator) void {
-        switch (self.data) {
-            .str => |s| if (s.owner) allocator.free(s.chars),
-            .function => |f| {
+        switch (self.kind) {
+            .str => {
+                const s: *ObjStr = @fieldParentPtr("obj", self);
+                allocator.free(s.chars);
+                allocator.destroy(s);
+            },
+            .function => {
+                const f: *ObjFunction = @fieldParentPtr("obj", self);
                 f.chunk.deinit();
                 allocator.destroy(f);
             },
-            .native => |n| {
+            .native => {
+                const n: *ObjNative = @fieldParentPtr("obj", self);
                 allocator.destroy(n);
             },
-            .closure => |o| {
+            .closure => {
+                const o: *ObjClosure = @fieldParentPtr("obj", self);
                 allocator.free(o.upvalues);
                 allocator.destroy(o);
             },
-            .upvalue => |u| {
+            .upvalue => {
+                const u: *ObjUpvalue = @fieldParentPtr("obj", self);
                 allocator.destroy(u);
             },
         }
-        allocator.destroy(self);
     }
 };
 
-pub const ObjData = union(enum) {
-    str: ObjStr,
-    function: *ObjFunction,
-    native: *ObjNative,
-    closure: *ObjClosure,
-    upvalue: *ObjUpvalue,
-};
-
 pub const ObjStr = struct {
-    owner: bool,
+    obj: Obj = .{ .kind = .str },
     chars: []const u8,
 };
 
@@ -102,14 +105,6 @@ pub inline fn numberValue(n: f64) Value {
 
 pub inline fn nilValue() Value {
     return Value{ .nil = {} };
-}
-
-pub inline fn objValue(o: *Obj) Value {
-    return Value{ .obj = o };
-}
-
-pub inline fn strObj(chars: []const u8) ObjStr {
-    return ObjStr{ .owner = true, .chars = chars };
 }
 
 pub inline fn isNumber(v: Value) bool {
@@ -134,59 +129,35 @@ pub inline fn isNil(v: Value) bool {
 }
 
 pub inline fn isString(v: Value) bool {
-    return switch (v) {
-        .obj => |o| switch (o.data) {
-            .str => true,
-            else => false,
-        },
-        else => false,
-    };
+    return v == .string;
 }
 
 pub inline fn asFunction(v: Value) *ObjFunction {
-    return v.obj.data.function;
+    return v.function;
 }
 
 pub inline fn asNative(v: Value) *ObjNative {
-    return v.obj.data.native;
+    return v.native;
 }
 
 pub inline fn asClosure(v: Value) *ObjClosure {
-    return v.obj.data.closure;
+    return v.closure;
 }
 
 pub inline fn asStr(v: Value) []const u8 {
-    return v.obj.data.str.chars;
+    return v.string.chars;
 }
 
 pub inline fn isFunction(v: Value) bool {
-    return switch (v) {
-        .obj => |o| switch (o.data) {
-            .function => true,
-            else => false,
-        },
-        else => false,
-    };
+    return v == .function;
 }
 
 pub inline fn isNative(v: Value) bool {
-    return switch (v) {
-        .obj => |o| switch (o.data) {
-            .native => true,
-            else => false,
-        },
-        else => false,
-    };
+    return v == .native;
 }
 
 pub inline fn isClosure(v: Value) bool {
-    return switch (v) {
-        .obj => |o| switch (o.data) {
-            .closure => true,
-            else => false,
-        },
-        else => false,
-    };
+    return v == .closure;
 }
 
 pub const Formatter = struct {
@@ -197,29 +168,28 @@ pub const Formatter = struct {
             .number => |number| try writer.print("{d}", .{number}),
             .bool => |boolean| try writer.print("{}", .{boolean}),
             .nil => try writer.writeAll("nil"),
-            .obj => |object| switch (object.data) {
-                .str => |string| {
-                    const preview_length = @min(string.chars.len, DEBUG_STRING_LIMIT);
-                    const preview = string.chars[0..preview_length];
-                    const ellipsis: []const u8 = if (preview_length < string.chars.len) "..." else "";
-                    try writer.print("\"{f}\"{s}", .{ std.zig.fmtString(preview), ellipsis });
-                },
-                .closure => |c| {
+            .string => |string| {
+                const preview_length = @min(string.chars.len, DEBUG_STRING_LIMIT);
+                const preview = string.chars[0..preview_length];
+                const ellipsis: []const u8 = if (preview_length < string.chars.len) "..." else "";
+                try writer.print("\"{f}\"{s}", .{ std.zig.fmtString(preview), ellipsis });
+            },
+            .closure => |c| {
+                if (std.mem.eql(u8, c.function.name.chars, "<script>")) {
+                    try writer.print("<script>", .{});
+                } else {
                     try writer.print("<fn {s}>", .{c.function.name.chars});
-                },
-                .function => |f| {
-                    if (std.mem.eql(u8, f.name.chars, "<script>")) {
-                        try writer.print("<script>", .{});
-                    } else {
-                        try writer.print("<fn {s}>", .{f.name.chars});
-                    }
-                },
-                .native => {
-                    try writer.print("<native>", .{});
-                },
-                .upvalue => {
-                    try writer.print("<upvalue>", .{});
-                },
+                }
+            },
+            .function => |f| {
+                if (std.mem.eql(u8, f.name.chars, "<script>")) {
+                    try writer.print("<script>", .{});
+                } else {
+                    try writer.print("<fn {s}>", .{f.name.chars});
+                }
+            },
+            .native => {
+                try writer.print("<native>", .{});
             },
         }
     }
@@ -234,30 +204,25 @@ pub fn write(v: Value, writer: *std.Io.Writer) std.Io.Writer.Error!void {
         .number => |number| try writer.print("{d}", .{number}),
         .bool => |boolean| try writer.print("{}", .{boolean}),
         .nil => try writer.writeAll("nil"),
-        .obj => |object| switch (object.data) {
-            .str => |string| try writer.writeAll(string.chars),
-            .function => |f| try writer.writeAll(f.name.chars),
-            .native => try writer.writeAll("<native_fn>"),
-            .closure => |c| try writer.writeAll(c.function.name.chars),
-            .upvalue => try writer.writeAll("<upvalue>"),
-        },
+        .string => |string| try writer.writeAll(string.chars),
+        .function => |f| try writer.writeAll(f.name.chars),
+        .native => try writer.writeAll("<native_fn>"),
+        .closure => |c| try writer.writeAll(c.function.name.chars),
     }
 }
 
 test "debug formatter escapes and truncates strings" {
-    var short = Obj{
-        .next = null,
-        .data = .{ .str = .{ .owner = false, .chars = "hello\nworld" } },
+    var short = ObjStr{
+        .chars = "hello\nworld",
     };
-    try std.testing.expectFmt("\"hello\\nworld\"", "{f}", .{format(objValue(&short))});
+    try std.testing.expectFmt("\"hello\\nworld\"", "{f}", .{format(.{ .string = &short })});
 
-    var long = Obj{
-        .next = null,
-        .data = .{ .str = .{ .owner = false, .chars = "1234567890123456789012345678901234567890tail" } },
+    var long = ObjStr{
+        .chars = "1234567890123456789012345678901234567890tail",
     };
     try std.testing.expectFmt(
         "\"1234567890123456789012345678901234567890\"...",
         "{f}",
-        .{format(objValue(&long))},
+        .{format(.{ .string = &long })},
     );
 }

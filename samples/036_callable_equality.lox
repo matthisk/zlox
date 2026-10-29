@@ -1,0 +1,21 @@
+fun makeClosure() {
+    var captured = 42;
+    fun closure() {
+        return captured;
+    }
+    return closure;
+}
+
+var first = makeClosure();
+var alias = first;
+var second = makeClosure();
+var nativeAlias = clock;
+
+var sameClosure = first == alias;
+var distinctClosures = first != second;
+var sameNative = clock == nativeAlias;
+var distinctNatives = clock != random;
+var closureVsNative = first != clock;
+var closureVsString = first != "function";
+var closureVsNil = first != nil;
+var sameString = ("func" + "tion") == "function";

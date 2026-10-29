@@ -246,3 +246,32 @@ test "025 runtime error" {
     const result = try executeTestFile(std.testing.allocator, "025_runtime_error.lox");
     try std.testing.expect(result == InterpretResult.RUNTIME_ERROR);
 }
+
+test "036 callable equality uses identity" {
+    const source = try loadTestFile(std.testing.allocator, "036_callable_equality.lox");
+    defer std.testing.allocator.free(source);
+
+    var scanner = Scanner.init(source.ptr);
+    var vm = try VM.init(std.testing.io, std.testing.allocator);
+    defer vm.deinit();
+    var compiler = try Compiler.init(std.testing.io, std.testing.allocator, &scanner, &vm, null, FunctionType.SCRIPT);
+    defer compiler.deinit();
+
+    const function = try compiler.compile();
+    try std.testing.expectEqual(null, try vm.startScript(function));
+    try std.testing.expectEqual(InterpretResult.OK, try vm.run());
+
+    for ([_][]const u8{
+        "sameClosure",
+        "distinctClosures",
+        "sameNative",
+        "distinctNatives",
+        "closureVsNative",
+        "closureVsString",
+        "closureVsNil",
+        "sameString",
+    }) |name| {
+        const result = vm.globals.get(name) orelse return error.MissingEqualityResult;
+        try std.testing.expectEqual(true, result.bool);
+    }
+}

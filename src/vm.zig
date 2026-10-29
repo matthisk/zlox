@@ -6,7 +6,6 @@ const value = @import("value.zig");
 const Chunk = chunk_mod.Chunk;
 const OpCode = chunk_mod.OpCode;
 const Value = value.Value;
-const Obj = value.Obj;
 const ObjFunction = value.ObjFunction;
 const ObjClosure = value.ObjClosure;
 const ObjUpvalue = value.ObjUpvalue;
@@ -163,11 +162,10 @@ pub const VM = struct {
         self.frameCount += 1;
     }
 
-    pub fn startScript(self: *VM, functionObject: *Obj) !?RuntimeFault {
-        const function = functionObject.data.function;
+    pub fn startScript(self: *VM, function: *ObjFunction) !?RuntimeFault {
         const closure = try self.heap.createClosure(function);
-        try self.stack.append(value.objValue(closure));
-        return self.call(closure.data.closure, 0);
+        try self.stack.append(.{ .closure = closure });
+        return self.call(closure, 0);
     }
 
     pub fn run(self: *VM) !InterpretResult {
@@ -334,13 +332,13 @@ pub const VM = struct {
                         const index = self.readMedium(&ip);
 
                         if (isLocal == 1) {
-                            c.data.closure.upvalues[i] = try self.captureUpvalue(&self.stack.values[frame.slots + index]);
+                            c.upvalues[i] = try self.captureUpvalue(&self.stack.values[frame.slots + index]);
                         } else {
-                            c.data.closure.upvalues[i] = frame.closure.upvalues[i];
+                            c.upvalues[i] = frame.closure.upvalues[i];
                         }
                     }
 
-                    try self.stack.append(value.objValue(c));
+                    try self.stack.append(.{ .closure = c });
                 },
                 OpCode.OP_GET_UPVALUE => {
                     const slot = self.readMedium(&ip);
@@ -373,17 +371,17 @@ pub const VM = struct {
                         self.readConstant(&ip, constants)
                     else
                         self.readLongConstant(&ip, constants);
-                    try self.globals.put(identifier.obj.data.str.chars, self.stack.pop().?);
+                    try self.globals.put(identifier.string.chars, self.stack.pop().?);
                 },
                 OpCode.OP_GET_GLOBAL, OpCode.OP_GET_GLOBAL_LONG => {
                     const identfier = if (instruction == .OP_GET_GLOBAL)
                         self.readConstant(&ip, constants)
                     else
                         self.readLongConstant(&ip, constants);
-                    const v = self.globals.get(identfier.obj.data.str.chars);
+                    const v = self.globals.get(identfier.string.chars);
 
                     if (v == null) {
-                        return .{ .undefined_variable = identfier.obj.data.str.chars };
+                        return .{ .undefined_variable = identfier.string.chars };
                     } else {
                         try self.stack.append(v.?);
                     }
@@ -393,7 +391,7 @@ pub const VM = struct {
                         self.readConstant(&ip, constants)
                     else
                         self.readLongConstant(&ip, constants);
-                    const name = identifier.obj.data.str.chars;
+                    const name = identifier.string.chars;
                     if (self.globals.contains(name)) {
                         try self.globals.put(name, self.peekStack(0));
                     } else {
@@ -525,16 +523,16 @@ pub const VM = struct {
     }
 
     inline fn concatenate(self: *VM) !void {
-        const b = self.stack.pop().?.obj.data.str.chars;
-        const a = self.stack.pop().?.obj.data.str.chars;
+        const b = self.stack.pop().?.string.chars;
+        const a = self.stack.pop().?.string.chars;
 
         const chars = try std.mem.concat(self.allocator, u8, &[_][]const u8{ a, b });
-        const v = value.objValue(try self.heap.takeString(chars));
+        const v: Value = .{ .string = try self.heap.takeString(chars) };
 
         try self.stack.append(v);
     }
 
-    inline fn valuesEqual(_: *VM, a: Value, b: Value) bool {
+    fn valuesEqual(_: *VM, a: Value, b: Value) bool {
         if (std.meta.activeTag(a) != std.meta.activeTag(b)) {
             return false;
         }
@@ -543,42 +541,39 @@ pub const VM = struct {
             .number => a.number == b.number,
             .bool => a.bool == b.bool,
             .nil => true,
-            .obj => {
-                if (std.meta.activeTag(a.obj.data) != std.meta.activeTag(b.obj.data)) {
-                    return false;
-                }
-
-                return std.mem.eql(u8, a.obj.data.str.chars, b.obj.data.str.chars);
-            },
+            .string => |s| std.mem.eql(u8, s.chars, b.string.chars),
+            .function => |f| f == b.function,
+            .native => |n| n == b.native,
+            .closure => |c| c == b.closure,
         };
     }
 
     inline fn callValue(self: *VM, callee: Value, argCount: u8) !?RuntimeFault {
-        if (value.isClosure(callee)) {
-            if (argCount != callee.obj.data.closure.function.arity) {
-                return .{ .expected_arguments = .{
-                    .expected = callee.obj.data.closure.function.arity,
-                    .actual = argCount,
-                } };
-            }
-            return try self.call(callee.obj.data.closure, argCount);
+        switch (callee) {
+            .closure => |closure| {
+                if (argCount != closure.function.arity) {
+                    return .{ .expected_arguments = .{
+                        .expected = closure.function.arity,
+                        .actual = argCount,
+                    } };
+                }
+                return try self.call(closure, argCount);
+            },
+            .native => |native| {
+                if (argCount != native.arity) {
+                    return .{ .expected_arguments = .{
+                        .expected = native.arity,
+                        .actual = argCount,
+                    } };
+                }
+                const firstArgumentOnStackOffset = self.stack.len - argCount;
+                const result = try native.function(self, argCount, self.stack.values[firstArgumentOnStackOffset..self.stack.len]);
+                self.stack.shrinkRetainingCapacity(firstArgumentOnStackOffset - 1);
+                try self.stack.append(result);
+                return null;
+            },
+            else => return .not_callable,
         }
-        if (value.isNative(callee)) {
-            const native = value.asNative(callee);
-            if (argCount != native.arity) {
-                return .{ .expected_arguments = .{
-                    .expected = native.arity,
-                    .actual = argCount,
-                } };
-            }
-            const firstArgumentOnStackOffset = self.stack.len - argCount;
-            const result = try native.function(self, argCount, self.stack.values[firstArgumentOnStackOffset..self.stack.len]);
-            self.stack.shrinkRetainingCapacity(firstArgumentOnStackOffset - 1);
-            try self.stack.append(result);
-            return null;
-        }
-
-        return .not_callable;
     }
 
     fn call(self: *VM, closure: *ObjClosure, argCount: u8) !?RuntimeFault {
@@ -596,8 +591,8 @@ pub const VM = struct {
     }
 
     fn defineNative(self: *VM, name: []const u8, arity: u8, native: value.NativeFn) !void {
-        try self.stack.append(value.objValue(try self.heap.copyString(name)));
-        try self.stack.append(value.objValue(try self.heap.createNative(arity, native)));
+        try self.stack.append(.{ .string = try self.heap.copyString(name) });
+        try self.stack.append(.{ .native = try self.heap.createNative(arity, native) });
         try self.globals.put(value.asStr(self.stack.values[0]), self.stack.values[1]);
         _ = self.stack.pop();
         _ = self.stack.pop();
@@ -656,7 +651,7 @@ pub const VM = struct {
 };
 
 pub fn readLineNative(vm: *VM, _: usize, _: []const Value) !Value {
-    return value.objValue(try vm.heap.copyString("hello world"));
+    return .{ .string = try vm.heap.copyString("hello world") };
 }
 
 pub fn strNative(vm: *VM, argCount: usize, args: []const Value) !Value {
@@ -668,16 +663,13 @@ pub fn strNative(vm: *VM, argCount: usize, args: []const Value) !Value {
         .bool => |b| try vm.heap.copyString(if (b) "true" else "false"),
         .number => |n| try vm.heap.takeString(try std.fmt.allocPrint(vm.allocator, "{d}", .{n})),
         .nil => try vm.heap.copyString("nil"),
-        .obj => |o| switch (o.data) {
-            .str => o,
-            .function => try vm.heap.copyString("function"),
-            .native => try vm.heap.copyString("native"),
-            .closure => try vm.heap.copyString("function"),
-            .upvalue => try vm.heap.copyString("upvalue"),
-        },
+        .string => |s| s,
+        .function => try vm.heap.copyString("function"),
+        .native => try vm.heap.copyString("native"),
+        .closure => try vm.heap.copyString("function"),
     };
 
-    return value.objValue(str);
+    return .{ .string = str };
 }
 
 pub fn sqrtNative(_: *VM, argCount: usize, args: []const Value) !Value {
@@ -747,13 +739,40 @@ const ExecutionTrace = struct {
     }
 };
 
+test "object equality compares strings by content and callables by identity" {
+    var vm = try VM.init(std.testing.io, std.testing.allocator);
+    defer vm.deinit();
+
+    var a = value.ObjStr{ .chars = "same" };
+    var b = value.ObjStr{ .chars = "same" };
+    try std.testing.expect(vm.valuesEqual(.{ .string = &a }, .{ .string = &b }));
+    b.chars = "different";
+    try std.testing.expect(!vm.valuesEqual(.{ .string = &a }, .{ .string = &b }));
+
+    const name = try vm.heap.copyString("test");
+    const function = try vm.heap.createFunction(name);
+    const otherFunction = try vm.heap.createFunction(name);
+    const closure = try vm.heap.createClosure(function);
+    const otherClosure = try vm.heap.createClosure(function);
+    const native = try vm.heap.createNative(0, readLineNative);
+    const otherNative = try vm.heap.createNative(0, readLineNative);
+    try std.testing.expect(vm.valuesEqual(.{ .function = function }, .{ .function = function }));
+    try std.testing.expect(!vm.valuesEqual(.{ .function = function }, .{ .function = otherFunction }));
+    try std.testing.expect(vm.valuesEqual(.{ .closure = closure }, .{ .closure = closure }));
+    try std.testing.expect(!vm.valuesEqual(.{ .closure = closure }, .{ .closure = otherClosure }));
+    try std.testing.expect(vm.valuesEqual(.{ .native = native }, .{ .native = native }));
+    try std.testing.expect(!vm.valuesEqual(.{ .native = native }, .{ .native = otherNative }));
+    try std.testing.expect(!vm.valuesEqual(.{ .closure = closure }, .{ .function = function }));
+    try std.testing.expect(!vm.valuesEqual(.{ .string = &a }, .nil));
+}
+
 test "stack overflow is a runtime fault and resets the VM" {
     var vm = try VM.init(std.testing.io, std.testing.allocator);
     defer vm.deinit();
 
     const name = try vm.heap.copyString("overflow");
-    const function = try vm.heap.createFunction(&name.data.str);
-    try function.data.function.chunk.writeChunk(@intFromEnum(OpCode.OP_NIL), 7);
+    const function = try vm.heap.createFunction(name);
+    try function.chunk.writeChunk(@intFromEnum(OpCode.OP_NIL), 7);
     try std.testing.expectEqual(@as(?RuntimeFault, null), try vm.startScript(function));
     while (vm.stack.len < STACK_MAX) {
         try vm.stack.append(value.nilValue());
@@ -774,7 +793,7 @@ test "execution trace labels instruction and pre-execution stack" {
     defer vm.deinit();
     const closure = try vm.heap.createClosure(function);
     vm.appendFrame(function);
-    vm.frames[vm.frameCount - 1].closure = closure.data.closure;
+    vm.frames[vm.frameCount - 1].closure = closure;
     try vm.stack.append(value.numberValue(1));
     try vm.stack.append(value.numberValue(2));
 
@@ -797,7 +816,7 @@ test "execution trace shows branch destination and decision" {
     defer vm.deinit();
     const closure = try vm.heap.createClosure(function);
     vm.appendFrame(function);
-    vm.frames[vm.frameCount - 1].closure = closure.data.closure;
+    vm.frames[vm.frameCount - 1].closure = closure;
     try vm.stack.append(value.boolValue(false));
 
     try std.testing.expectFmt(
@@ -812,7 +831,7 @@ inline fn isTruthy(v: Value) bool {
         .bool => v.bool,
         .number => false,
         .nil => false,
-        .obj => false,
+        .string, .function, .native, .closure => false,
     };
 }
 
@@ -821,6 +840,6 @@ inline fn isFalsey(v: Value) bool {
         .bool => !v.bool,
         .number => false,
         .nil => true,
-        .obj => true,
+        .string, .function, .native, .closure => true,
     };
 }

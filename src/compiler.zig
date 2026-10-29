@@ -11,7 +11,6 @@ const TokenType = scanner_mod.TokenType;
 const Token = scanner_mod.Token;
 const Value = value_mod.Value;
 const numberValue = value_mod.numberValue;
-const Obj = value_mod.Obj;
 const ObjFunction = value_mod.ObjFunction;
 
 const Chunk = chunk_mod.Chunk;
@@ -123,7 +122,7 @@ pub const Compiler = struct {
     hadError: bool = false,
     chunk: *Chunk = undefined,
     rules: ParseRules = undefined,
-    functionObject: *Obj = undefined,
+    functionObject: *ObjFunction = undefined,
     type: FunctionType = undefined,
     locals: std.ArrayList(Local) = undefined,
     scopeDepth: usize = 0,
@@ -146,7 +145,7 @@ pub const Compiler = struct {
         else
             "<script>";
         const nameObject = try vm.heap.copyString(name);
-        compiler.functionObject = try vm.heap.createFunction(&nameObject.data.str);
+        compiler.functionObject = try vm.heap.createFunction(nameObject);
 
         compiler.locals = std.ArrayList(Local).empty;
         // The first slot in the locals stack is reserved for the VM.
@@ -214,7 +213,7 @@ pub const Compiler = struct {
         self.loopStartStack.deinit(self.allocator);
     }
 
-    pub fn compile(self: *Compiler) !*Obj {
+    pub fn compile(self: *Compiler) !*ObjFunction {
         self.advance();
 
         while (!self.match(TokenType.TOKEN_EOF)) {
@@ -228,9 +227,8 @@ pub const Compiler = struct {
         } else if (comptime DEBUG_COMPILER) {
             var currentObj = self.vm.heap.objects;
             while (currentObj != null) {
-                const value = value_mod.objValue(currentObj.?);
-                if (value_mod.isFunction(value)) {
-                    const func = currentObj.?.data.function;
+                if (currentObj.?.kind == .function) {
+                    const func: *ObjFunction = @fieldParentPtr("obj", currentObj.?);
                     std.debug.print("\n", .{});
                     func.chunk.disassemble(func.name.chars);
                 }
@@ -267,7 +265,7 @@ pub const Compiler = struct {
             // TODO: this needs a separate op code.
             try self.emitOpWithMediumOperand(OpCode.OP_CLOSURE, i);
         }
-        for (0..inner.functionObject.data.function.upvalueCount) |j| {
+        for (0..inner.functionObject.upvalueCount) |j| {
             try self.emitByte(if (inner.upvalues[j].isLocal) 1 else 0);
             try self.emitMedium(inner.upvalues[j].index);
         }
@@ -302,7 +300,7 @@ pub const Compiler = struct {
 
         try self.emitReturn();
 
-        return value_mod.objValue(self.functionObject);
+        return .{ .function = self.functionObject };
     }
 
     fn statement(self: *Compiler) anyerror!void {
@@ -592,12 +590,12 @@ pub const Compiler = struct {
 
     fn identifierConstant(self: *Compiler) !u24 {
         const obj = try self.vm.heap.copyString(self.previous.lexeme);
-        const constant = self.currentChunk().findValue(obj.data.str.chars);
+        const constant = self.currentChunk().findValue(obj.chars);
         if (constant != null) {
             return constant.?;
         }
 
-        return try self.makeConstant(value_mod.objValue(obj));
+        return try self.makeConstant(.{ .string = obj });
     }
 
     fn defineVariable(self: *Compiler, global: u24) !void {
@@ -728,7 +726,7 @@ pub const Compiler = struct {
     }
 
     fn addUpvalue(self: *Compiler, index: u24, isLocal: bool) !u8 {
-        const upvalueCount = self.functionObject.data.function.upvalueCount;
+        const upvalueCount = self.functionObject.upvalueCount;
 
         if (upvalueCount >= UINT8_COUNT) {
             return CompilerError.TooManyUpvalues;
@@ -736,14 +734,14 @@ pub const Compiler = struct {
 
         self.upvalues[upvalueCount].isLocal = isLocal;
         self.upvalues[upvalueCount].index = index;
-        self.functionObject.data.function.upvalueCount += 1;
-        return self.functionObject.data.function.upvalueCount - 1;
+        self.functionObject.upvalueCount += 1;
+        return self.functionObject.upvalueCount - 1;
     }
 
     fn string(self: *Compiler, _: bool) !void {
         const input = self.previous.lexeme[1 .. self.previous.lexeme.len - 1];
         const object = try self.vm.heap.copyString(input);
-        try self.emitConstant(value_mod.objValue(object));
+        try self.emitConstant(.{ .string = object });
     }
 
     fn grouping(self: *Compiler, _: bool) !void {
@@ -1029,7 +1027,7 @@ pub const Compiler = struct {
     }
 
     fn currentFunction(self: *Compiler) *ObjFunction {
-        return self.functionObject.data.function;
+        return self.functionObject;
     }
 
     fn currentChunk(self: *Compiler) *Chunk {
