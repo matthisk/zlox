@@ -3,6 +3,7 @@ const VM = @import("vm.zig").VM;
 const Chunk = @import("chunk.zig").Chunk;
 
 const DEBUG_STRING_LIMIT = 40;
+const DEBUG_GC = @import("config").debug_gc;
 
 pub const NativeFn = *const fn (vm: *VM, argCount: usize, args: []const Value) anyerror!Value;
 
@@ -59,9 +60,42 @@ pub const ObjNative = struct {
 
 pub const Obj = struct {
     next: ?*Obj = null,
+    marked: bool = false,
     kind: enum { str, function, native, closure, upvalue },
 
+    pub fn mark(self: *Obj) void {
+        self.marked = true;
+    }
+
+    pub fn format(self: *Obj, writer: *std.Io.Writer) std.Io.Writer.Error!void {
+        switch (self.kind) {
+            .str => {
+                const s: *ObjStr = @fieldParentPtr("obj", self);
+                try writer.print("{f}", .{Formatter{ .value = Value{ .string = s } }});
+            },
+            .function => {
+                const f: *ObjFunction = @fieldParentPtr("obj", self);
+                try writer.print("{f}", .{Formatter{ .value = Value{ .function = f } }});
+            },
+            .native => {
+                const n: *ObjNative = @fieldParentPtr("obj", self);
+                try writer.print("{f}", .{Formatter{ .value = Value{ .native = n } }});
+            },
+            .closure => {
+                const o: *ObjClosure = @fieldParentPtr("obj", self);
+                try writer.print("{f}", .{Formatter{ .value = Value{ .closure = o } }});
+            },
+            .upvalue => {
+                const u: *ObjUpvalue = @fieldParentPtr("obj", self);
+                try writer.print("{f}", .{Formatter{ .value = u.closed }});
+            },
+        }
+    }
+
     pub fn destroy(self: *Obj, allocator: std.mem.Allocator) void {
+        if (comptime DEBUG_GC) {
+            std.debug.print("{*} free type {s}\n", .{ self, @tagName(self.kind) });
+        }
         switch (self.kind) {
             .str => {
                 const s: *ObjStr = @fieldParentPtr("obj", self);
@@ -176,14 +210,14 @@ pub const Formatter = struct {
             },
             .closure => |c| {
                 if (std.mem.eql(u8, c.function.name.chars, "<script>")) {
-                    try writer.print("<script>", .{});
+                    try writer.print("<c script>", .{});
                 } else {
-                    try writer.print("<fn {s}>", .{c.function.name.chars});
+                    try writer.print("<cl {s}>", .{c.function.name.chars});
                 }
             },
             .function => |f| {
                 if (std.mem.eql(u8, f.name.chars, "<script>")) {
-                    try writer.print("<script>", .{});
+                    try writer.print("<f script>", .{});
                 } else {
                     try writer.print("<fn {s}>", .{f.name.chars});
                 }

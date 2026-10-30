@@ -6,6 +6,7 @@ const value = @import("value.zig");
 const Chunk = chunk_mod.Chunk;
 const OpCode = chunk_mod.OpCode;
 const Value = value.Value;
+const ObjStr = value.ObjStr;
 const ObjFunction = value.ObjFunction;
 const ObjClosure = value.ObjClosure;
 const ObjUpvalue = value.ObjUpvalue;
@@ -22,7 +23,6 @@ const Errors = error{RuntimeError};
 
 const CallFrame = struct {
     closure: *ObjClosure,
-    function: *ObjFunction,
     ip: [*]u8,
     slots: usize,
 };
@@ -120,7 +120,7 @@ pub const VM = struct {
     allocator: std.mem.Allocator,
     stack: Stack,
     heap: Heap,
-    globals: std.StringHashMap(Value),
+    globals: std.AutoHashMap(*ObjStr, Value),
     frames: [FRAMES_MAX]CallFrame = undefined,
     frameCount: usize,
     openUpvalues: ?*ObjUpvalue = null,
@@ -131,7 +131,7 @@ pub const VM = struct {
             .allocator = allocator,
             .stack = .{},
             .heap = Heap.init(allocator),
-            .globals = std.StringHashMap(Value).init(allocator),
+            .globals = std.AutoHashMap(*ObjStr, Value).init(allocator),
             .frameCount = 0,
         };
 
@@ -154,9 +154,13 @@ pub const VM = struct {
         self.frameCount = 0;
     }
 
+    pub fn getGlobal(self: *VM, name: []const u8) ?Value {
+        const interned = self.heap.strings.get(name) orelse return null;
+        return self.globals.get(interned);
+    }
+
     pub fn appendFrame(self: *VM, function: *ObjFunction) void {
         var frame = &self.frames[self.frameCount];
-        frame.function = function;
         frame.ip = function.chunk.code.items.ptr;
         frame.slots = self.stack.len;
         self.frameCount += 1;
@@ -193,6 +197,8 @@ pub const VM = struct {
 
         var instruction_count: usize = 0;
         while (true) {
+            try self.heap.collectGarbage(self);
+
             const instruction_offset = @intFromPtr(ip) - @intFromPtr(code);
             if (comptime DEBUG_VM) {
                 if (instruction_count < DEBUG_INSTRUCTION_LIMIT) {
@@ -375,14 +381,14 @@ pub const VM = struct {
                         self.readConstant(&ip, constants)
                     else
                         self.readLongConstant(&ip, constants);
-                    try self.globals.put(identifier.string.chars, self.stack.pop().?);
+                    try self.globals.put(identifier.string, self.stack.pop().?);
                 },
                 OpCode.OP_GET_GLOBAL, OpCode.OP_GET_GLOBAL_LONG => {
                     const identfier = if (instruction == .OP_GET_GLOBAL)
                         self.readConstant(&ip, constants)
                     else
                         self.readLongConstant(&ip, constants);
-                    const v = self.globals.get(identfier.string.chars);
+                    const v = self.globals.get(identfier.string);
 
                     if (v == null) {
                         return .{ .undefined_variable = identfier.string.chars };
@@ -395,11 +401,11 @@ pub const VM = struct {
                         self.readConstant(&ip, constants)
                     else
                         self.readLongConstant(&ip, constants);
-                    const name = identifier.string.chars;
+                    const name = identifier.string;
                     if (self.globals.contains(name)) {
                         try self.globals.put(name, self.peekStack(0));
                     } else {
-                        return .{ .undefined_variable = name };
+                        return .{ .undefined_variable = name.chars };
                     }
                 },
                 OpCode.OP_GET_LOCAL => {
@@ -588,7 +594,6 @@ pub const VM = struct {
         var frame = &self.frames[self.frameCount];
         self.frameCount += 1;
         frame.closure = closure;
-        frame.function = closure.function;
         frame.ip = closure.function.chunk.code.items.ptr;
         frame.slots = self.stack.len - argCount - 1;
         return null;
@@ -597,7 +602,7 @@ pub const VM = struct {
     fn defineNative(self: *VM, name: []const u8, arity: u8, native: value.NativeFn) !void {
         try self.stack.append(.{ .string = try self.heap.copyString(name) });
         try self.stack.append(.{ .native = try self.heap.createNative(arity, native) });
-        try self.globals.put(value.asStr(self.stack.values[0]), self.stack.values[1]);
+        try self.globals.put(self.stack.values[0].string, self.stack.values[1]);
         _ = self.stack.pop();
         _ = self.stack.pop();
     }
@@ -644,7 +649,7 @@ pub const VM = struct {
         for (1..self.frameCount + 1) |incIndex| {
             const i = self.frameCount - incIndex;
             const nextFrame = &self.frames[i];
-            const func = nextFrame.function;
+            const func = nextFrame.closure.function;
             const index = @intFromPtr(nextFrame.ip) - @intFromPtr(func.chunk.code.items.ptr) - 1;
             std.debug.print("[vm] runtime error | line {d} | ", .{func.chunk.getLine(index)});
             std.debug.print("{s}()\n", .{func.name.chars});

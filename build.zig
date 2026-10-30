@@ -19,6 +19,7 @@ pub fn build(b: *std.Build) void {
     options.addOption(bool, "debug_scanner", b.option(bool, "debug-scanner", "Enable scanner debug output") orelse false);
     options.addOption(bool, "debug_compiler", b.option(bool, "debug-compiler", "Enable compiler debug output") orelse false);
     options.addOption(bool, "debug_vm", b.option(bool, "debug-vm", "Enable VM debug output") orelse false);
+    options.addOption(bool, "debug_gc", b.option(bool, "debug-gc", "Enable GC debug output") orelse false);
 
     // We will also create a module for our other entry point, 'main.zig'.
     const exe_mod = b.createModule(.{

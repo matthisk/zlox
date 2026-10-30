@@ -1,0 +1,9 @@
+// This concatenation creates a string that remains reachable through a global.
+var kept = "keep" + " me";
+print kept;
+
+// This concatenation creates a string that becomes unreachable after this line.
+"collect" + " me";
+
+// Gives the next GC cycle a chance to sweep the discarded string.
+print "done";

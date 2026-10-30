@@ -134,7 +134,7 @@ test "global operand widths at constant indices 255 and 256" {
         try std.testing.expectEqual(expected.len, seen);
         try std.testing.expectEqual(null, try vm.startScript(function));
         try std.testing.expectEqual(InterpretResult.OK, try vm.run());
-        try std.testing.expect(vm.globals.get("target").?.bool);
+        try std.testing.expect(vm.getGlobal("target").?.bool);
     }
 }
 
@@ -304,7 +304,7 @@ test "036 callable equality uses identity" {
         "closureVsNil",
         "sameString",
     }) |name| {
-        const result = vm.globals.get(name) orelse return error.MissingEqualityResult;
+        const result = vm.getGlobal(name) orelse return error.MissingEqualityResult;
         try std.testing.expectEqual(true, result.bool);
     }
 }
