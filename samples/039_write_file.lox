@@ -1,0 +1,1 @@
+writeFile(".zig-cache/zlox_write_file_sample.txt", "Hello from Lox!");

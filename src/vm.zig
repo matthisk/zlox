@@ -141,6 +141,7 @@ pub const VM = struct {
         try vm.defineNative("sqrt", 1, sqrtNative);
         try vm.defineNative("str", 1, strNative);
         try vm.defineNative("readLine", 0, readLineNative);
+        try vm.defineNative("writeFile", 2, writeFileNative);
 
         return vm;
     }
@@ -666,6 +667,22 @@ pub fn readLineNative(vm: *VM, _: usize, _: []const Value) !Value {
     return .{ .string = try vm.heap.copyString("hello world") };
 }
 
+pub fn writeFileNative(vm: *VM, argCount: usize, args: []const Value) !Value {
+    if (argCount != 2) {
+        return Errors.RuntimeError;
+    }
+    if (!value.isString(args[0]) or !value.isString(args[1])) {
+        return Errors.RuntimeError;
+    }
+
+    try std.Io.Dir.cwd().writeFile(vm.io, .{
+        .sub_path = args[0].string.chars,
+        .data = args[1].string.chars,
+    });
+
+    return value.nilValue();
+}
+
 pub fn strNative(vm: *VM, argCount: usize, args: []const Value) !Value {
     if (argCount != 1) {
         return Errors.RuntimeError;
@@ -776,6 +793,19 @@ test "object equality compares strings by content and callables by identity" {
     try std.testing.expect(!vm.valuesEqual(.{ .native = native }, .{ .native = otherNative }));
     try std.testing.expect(!vm.valuesEqual(.{ .closure = closure }, .{ .function = function }));
     try std.testing.expect(!vm.valuesEqual(.{ .string = &a }, .nil));
+}
+
+test "writeFile native requires a path and contents string" {
+    var vm = try VM.init(std.testing.io, std.testing.allocator);
+    defer vm.deinit();
+
+    const contents = try vm.heap.copyString("contents");
+    const args = [_]Value{
+        value.numberValue(1),
+        .{ .string = contents },
+    };
+
+    try std.testing.expectError(error.RuntimeError, writeFileNative(&vm, args.len, &args));
 }
 
 test "stack overflow is a runtime fault and resets the VM" {

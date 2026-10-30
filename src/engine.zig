@@ -313,3 +313,20 @@ test "038 garbage collection stress" {
     const result = try executeTestFile(std.testing.allocator, "038_garbage_collection_stress.lox");
     try std.testing.expectEqual(InterpretResult.OK, result);
 }
+
+test "039 write file" {
+    const output_path = ".zig-cache/zlox_write_file_sample.txt";
+    defer std.Io.Dir.cwd().deleteFile(std.testing.io, output_path) catch {};
+
+    const result = try executeTestFile(std.testing.allocator, "039_write_file.lox");
+    try std.testing.expectEqual(InterpretResult.OK, result);
+
+    const contents = try std.Io.Dir.cwd().readFileAlloc(
+        std.testing.io,
+        output_path,
+        std.testing.allocator,
+        .limited(1024),
+    );
+    defer std.testing.allocator.free(contents);
+    try std.testing.expectEqualStrings("Hello from Lox!", contents);
+}
