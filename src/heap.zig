@@ -26,6 +26,8 @@ pub const Heap = struct {
     strings: std.StringHashMap(*ObjStr),
     grayStack: std.ArrayList(*Obj),
     nextGC: usize = INITIAL_GC_THRESHOLD,
+    compiler: ?*Compiler = null,
+    garbageCollectionEnabled: bool = false,
 
     pub fn init(childAllocator: std.mem.Allocator) !Heap {
         // Allocator interfaces point at their implementation state. Keeping
@@ -47,8 +49,19 @@ pub const Heap = struct {
         return self.trackingAllocator.bytesAllocated > self.nextGC;
     }
 
+    pub fn checkAndCollect(self: *Heap) !void {
+        // TODO: Now we collect once the heap is already larger than nextGC.
+        // Instead we should collect when the upcoming allocation would surpass the max heap threshold.
+        if (self.garbageCollectionEnabled and self.shouldCollectGarbage()) {
+            const vm: *VM = @fieldParentPtr("heap", self);
+            try self.collectGarbage(vm);
+        }
+    }
+
     /// Core garbage collection loop.
     pub fn collectGarbage(self: *Heap, vm: *VM) !void {
+        const bytesBefore = self.trackingAllocator.bytesAllocated;
+
         if (comptime DEBUG_GC) {
             std.debug.print("-- gc begin\n", .{});
         }
@@ -60,7 +73,10 @@ pub const Heap = struct {
         self.nextGC = std.math.mul(usize, self.trackingAllocator.bytesAllocated, 2) catch std.math.maxInt(usize);
 
         if (comptime DEBUG_GC) {
-            std.debug.print("-- gc end\n", .{});
+            const bytesAfter = self.trackingAllocator.bytesAllocated;
+            const bytesFreed = bytesBefore -| bytesAfter;
+            const bytesUntilNextGC = self.nextGC -| bytesAfter;
+            std.debug.print("-- gc end: freed {d} bytes, {d} bytes until next collection\n", .{ bytesFreed, bytesUntilNextGC });
         }
     }
 
@@ -128,13 +144,12 @@ pub const Heap = struct {
             upvalue = upvalue.?.next;
         }
 
-        // TODO: Currently there is no active compiler when GC runs.
         // 5) mark active compiler function objects
-        // var currentCompiler = compiler;
-        // while (currentCompiler != null) {
-        //     self.markObj(currentCompiler.functionObject);
-        //    currentCompiler = currentCompiler.enclosing;
-        // }
+        var compiler = self.compiler;
+        while (compiler) |current| {
+            try self.markObj(&current.functionObject.obj);
+            compiler = current.enclosing;
+        }
     }
 
     pub fn blackenObj(self: *Heap, obj: *Obj) !void {
@@ -153,7 +168,7 @@ pub const Heap = struct {
             .closure => {
                 const closure: *ObjClosure = @fieldParentPtr("obj", obj);
                 try self.markObj(&closure.function.obj);
-                for (closure.upvalues) |upvalue| {
+                for (closure.upvalues[0..closure.initializedUpvalueCount]) |upvalue| {
                     try self.markObj(&upvalue.obj);
                 }
             },
@@ -194,6 +209,8 @@ pub const Heap = struct {
 
     /// The name must remain alive for the lifetime of the function.
     pub fn createFunction(self: *Heap, name: *ObjStr) !*ObjFunction {
+        try self.checkAndCollect();
+
         const function = try ObjFunction.create(self.allocator);
         errdefer function.destroy(self.allocator);
         function.name = name;
@@ -209,6 +226,8 @@ pub const Heap = struct {
     }
 
     pub fn createNative(self: *Heap, arity: u8, fun: value_mod.NativeFn) !*ObjNative {
+        try self.checkAndCollect();
+
         const native = try self.allocator.create(ObjNative);
         errdefer self.allocator.destroy(native);
         native.* = .{ .function = fun, .arity = arity };
@@ -223,11 +242,14 @@ pub const Heap = struct {
     }
 
     pub fn createClosure(self: *Heap, fun: *ObjFunction) !*ObjClosure {
+        try self.checkAndCollect();
+
         const closure = try self.allocator.create(ObjClosure);
         errdefer self.allocator.destroy(closure);
         closure.* = .{
             .function = fun,
             .upvalues = try self.allocator.alloc(*ObjUpvalue, fun.upvalueCount),
+            .initializedUpvalueCount = 0,
         };
         errdefer self.allocator.free(closure.upvalues);
 
@@ -240,6 +262,8 @@ pub const Heap = struct {
     }
 
     pub fn createUpvalue(self: *Heap, value: *Value) !*ObjUpvalue {
+        try self.checkAndCollect();
+
         const upvalue = try self.allocator.create(ObjUpvalue);
         errdefer self.allocator.destroy(upvalue);
         upvalue.* = .{ .location = value };
@@ -256,6 +280,7 @@ pub const Heap = struct {
     /// it is not already present.
     pub fn copyString(self: *Heap, chars: []const u8) !*ObjStr {
         if (self.strings.get(chars)) |interned| return interned;
+        try self.checkAndCollect();
 
         const owned_chars = try self.allocator.dupe(u8, chars);
         return self.takeString(owned_chars);
@@ -270,6 +295,7 @@ pub const Heap = struct {
             return interned;
         }
 
+        try self.checkAndCollect();
         const object = self.allocator.create(ObjStr) catch |err| {
             self.allocator.free(chars);
             return err;
@@ -360,7 +386,7 @@ fn exerciseObjectAllocations(allocator: std.mem.Allocator) !void {
     const closure = try heap.createClosure(function);
     var local: Value = .{ .number = 42 };
     const upvalue = try heap.createUpvalue(&local);
-    closure.upvalues[0] = upvalue;
+    closure.setUpvalue(0, upvalue);
     const native = try heap.createNative(0, testNative);
 
     try std.testing.expect(heap.objects == &native.obj);

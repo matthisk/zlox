@@ -79,12 +79,17 @@ fn loadTestFile(allocator: std.mem.Allocator, filename: []const u8) ![]u8 {
 }
 
 fn executeTestFile(allocator: std.mem.Allocator, filename: []const u8) !InterpretResult {
+    return executeTestFileWithGCThreshold(allocator, filename, null);
+}
+
+fn executeTestFileWithGCThreshold(allocator: std.mem.Allocator, filename: []const u8, gcThreshold: ?usize) !InterpretResult {
     const source = try loadTestFile(allocator, filename);
     defer allocator.free(source);
 
     var scanner = Scanner.init(source.ptr);
     var vm = try VM.init(std.testing.io, allocator);
     defer vm.deinit();
+    if (gcThreshold) |threshold| vm.heap.nextGC = threshold;
     var compiler = try Compiler.init(std.testing.io, allocator, &scanner, &vm, null, FunctionType.SCRIPT);
     defer compiler.deinit();
 
@@ -310,7 +315,7 @@ test "036 callable equality uses identity" {
 }
 
 test "038 garbage collection stress" {
-    const result = try executeTestFile(std.testing.allocator, "038_garbage_collection_stress.lox");
+    const result = try executeTestFileWithGCThreshold(std.testing.allocator, "038_garbage_collection_stress.lox", 1);
     try std.testing.expectEqual(InterpretResult.OK, result);
 }
 

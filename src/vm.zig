@@ -134,6 +134,7 @@ pub const VM = struct {
             .globals = std.AutoHashMap(*ObjStr, Value).init(allocator),
             .frameCount = 0,
         };
+        vm.heap.garbageCollectionEnabled = true;
         errdefer vm.deinit();
 
         try vm.defineNative("clock", 0, clockNative);
@@ -156,6 +157,14 @@ pub const VM = struct {
         self.frameCount = 0;
     }
 
+    pub fn pushRoot(self: *VM, root: Value) !void {
+        try self.stack.append(root);
+    }
+
+    pub fn popRoot(self: *VM) void {
+        _ = self.stack.pop();
+    }
+
     pub fn getGlobal(self: *VM, name: []const u8) ?Value {
         const interned = self.heap.strings.get(name) orelse return null;
         return self.globals.get(interned);
@@ -169,8 +178,11 @@ pub const VM = struct {
     }
 
     pub fn startScript(self: *VM, function: *ObjFunction) !?RuntimeFault {
+        try self.stack.append(.{ .function = function });
+        errdefer _ = self.stack.pop();
+
         const closure = try self.heap.createClosure(function);
-        try self.stack.append(.{ .closure = closure });
+        self.stack.values[self.stack.len - 1] = .{ .closure = closure };
         return self.call(closure, 0);
     }
 
@@ -199,10 +211,6 @@ pub const VM = struct {
 
         var instruction_count: usize = 0;
         while (true) {
-            if (self.heap.shouldCollectGarbage()) {
-                try self.heap.collectGarbage(self);
-            }
-
             const instruction_offset = @intFromPtr(ip) - @intFromPtr(code);
             if (comptime DEBUG_VM) {
                 if (instruction_count < DEBUG_INSTRUCTION_LIMIT) {
@@ -340,19 +348,24 @@ pub const VM = struct {
                         constants[self.readMedium(&ip)];
                     const f = value.asFunction(functionValue);
                     const c = try self.heap.createClosure(f);
+                    try self.stack.append(.{ .closure = c });
+
+                    var initialized = false;
+                    defer {
+                        if (!initialized) _ = self.stack.pop();
+                    }
 
                     for (0..f.upvalueCount) |i| {
                         const isLocal = self.readByte(&ip);
                         const index = self.readMedium(&ip);
 
-                        if (isLocal == 1) {
-                            c.upvalues[i] = try self.captureUpvalue(&self.stack.values[frame.slots + index]);
-                        } else {
-                            c.upvalues[i] = frame.closure.upvalues[i];
-                        }
+                        const upvalue = if (isLocal == 1)
+                            try self.captureUpvalue(&self.stack.values[frame.slots + index])
+                        else
+                            frame.closure.upvalues[i];
+                        c.setUpvalue(i, upvalue);
                     }
-
-                    try self.stack.append(.{ .closure = c });
+                    initialized = true;
                 },
                 OpCode.OP_GET_UPVALUE => {
                     const slot = self.readMedium(&ip);
@@ -537,11 +550,17 @@ pub const VM = struct {
     }
 
     inline fn concatenate(self: *VM) !void {
-        const b = self.stack.pop().?.string.chars;
-        const a = self.stack.pop().?.string.chars;
+        const b = self.peekStack(0).string.chars;
+        const a = self.peekStack(1).string.chars;
+
+        // Perform a garbage collection run (if needed) before we allocate the new string buffer.
+        try self.heap.checkAndCollect();
 
         const chars = try std.mem.concat(self.heap.allocator, u8, &[_][]const u8{ a, b });
         const v: Value = .{ .string = try self.heap.takeString(chars) };
+
+        _ = self.stack.pop();
+        _ = self.stack.pop();
 
         try self.stack.append(v);
     }

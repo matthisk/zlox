@@ -21,6 +21,13 @@ pub const ObjClosure = struct {
     obj: Obj = .{ .kind = .closure },
     function: *ObjFunction,
     upvalues: []*ObjUpvalue,
+    initializedUpvalueCount: usize = 0,
+
+    pub fn setUpvalue(self: *ObjClosure, index: usize, upvalue: *ObjUpvalue) void {
+        std.debug.assert(index == self.initializedUpvalueCount);
+        self.upvalues[index] = upvalue;
+        self.initializedUpvalueCount += 1;
+    }
 };
 
 pub const ObjUpvalue = struct {

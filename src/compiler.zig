@@ -145,6 +145,8 @@ pub const Compiler = struct {
         else
             "<script>";
         const nameObject = try vm.heap.copyString(name);
+        try vm.pushRoot(.{ .string = nameObject });
+        defer vm.popRoot();
         compiler.functionObject = try vm.heap.createFunction(nameObject);
 
         compiler.locals = std.ArrayList(Local).empty;
@@ -214,6 +216,10 @@ pub const Compiler = struct {
     }
 
     pub fn compile(self: *Compiler) !*ObjFunction {
+        const previousCompiler = self.vm.heap.compiler;
+        self.vm.heap.compiler = self;
+        defer self.vm.heap.compiler = previousCompiler;
+
         self.advance();
 
         while (!self.match(TokenType.TOKEN_EOF)) {
@@ -275,6 +281,10 @@ pub const Compiler = struct {
     }
 
     fn fun(self: *Compiler) !Value {
+        const previousCompiler = self.vm.heap.compiler;
+        self.vm.heap.compiler = self;
+        defer self.vm.heap.compiler = previousCompiler;
+
         self.beginScope();
 
         self.consume(TokenType.TOKEN_LEFT_PAREN, "Expect '(' after function name.");
