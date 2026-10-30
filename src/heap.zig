@@ -12,6 +12,7 @@ const ObjNative = value_mod.ObjNative;
 const ObjClosure = value_mod.ObjClosure;
 const ObjUpvalue = value_mod.ObjUpvalue;
 const ObjStr = value_mod.ObjStr;
+const ObjArray = value_mod.ObjArray;
 
 const DEBUG_GC = config.debug_gc;
 const INITIAL_GC_THRESHOLD = 1024 * 1024;
@@ -176,6 +177,12 @@ pub const Heap = struct {
                 const upvalue: *ObjUpvalue = @fieldParentPtr("obj", obj);
                 try self.markValue(upvalue.closed);
             },
+            .array => {
+                const array: *ObjArray = @fieldParentPtr("obj", obj);
+                for (array.values.items) |value| {
+                    try self.markValue(value);
+                }
+            },
             else => {},
         }
     }
@@ -186,6 +193,7 @@ pub const Heap = struct {
             .closure => |c| try self.markObj(&c.obj),
             .native => |n| try self.markObj(&n.obj),
             .string => |s| try self.markObj(&s.obj),
+            .array => |a| try self.markObj(&a.obj),
             else => {},
         }
     }
@@ -205,6 +213,21 @@ pub const Heap = struct {
     pub fn register(self: *Heap, object: *Obj) void {
         object.next = self.objects;
         self.objects = object;
+    }
+
+    pub fn createArray(self: *Heap, len: usize) !*ObjArray {
+        try self.checkAndCollect();
+
+        const array = try self.allocator.create(ObjArray);
+        array.* = .{};
+
+        self.register(&array.obj);
+
+        if (comptime DEBUG_GC) {
+            std.debug.print("{*} allocate {d} for {s}\n", .{ array, @sizeOf(ObjArray) + @sizeOf(Value) * len, "<array>" });
+        }
+
+        return array;
     }
 
     /// The name must remain alive for the lifetime of the function.

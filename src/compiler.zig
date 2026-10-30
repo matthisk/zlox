@@ -164,6 +164,8 @@ pub const Compiler = struct {
         compiler.rules.set(TokenType.TOKEN_RIGHT_PAREN, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
         compiler.rules.set(TokenType.TOKEN_LEFT_BRACE, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
         compiler.rules.set(TokenType.TOKEN_RIGHT_BRACE, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
+        compiler.rules.set(TokenType.TOKEN_LEFT_BRACKET, ParseRule{ .prefix = array, .infix = null, .precedence = Precedence.NONE });
+        compiler.rules.set(TokenType.TOKEN_RIGHT_BRACKET, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
         compiler.rules.set(TokenType.TOKEN_COMMA, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
         compiler.rules.set(TokenType.TOKEN_DOT, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
         compiler.rules.set(TokenType.TOKEN_MINUS, ParseRule{ .prefix = unary, .infix = binary, .precedence = Precedence.TERM });
@@ -655,6 +657,25 @@ pub const Compiler = struct {
 
         if (canAssign and self.match(TokenType.TOKEN_EQUAL)) {
             self.errorAtCurrent("Invalid assignment target.");
+        }
+    }
+
+    fn array(self: *Compiler, _: bool) !void {
+        var len: u24 = 0;
+        if (!self.check(TokenType.TOKEN_RIGHT_BRACKET)) {
+            while (true) {
+                try self.expression();
+                len += 1;
+                if (!self.match(TokenType.TOKEN_COMMA)) break;
+            }
+        }
+
+        self.consume(TokenType.TOKEN_RIGHT_BRACKET, "Expect ']' after list.");
+
+        if (len < 0xFF) {
+            try self.emitOpWithByteOperand(OpCode.OP_ARRAY, @intCast(len));
+        } else {
+            try self.emitOpWithMediumOperand(OpCode.OP_ARRAY_LONG, len);
         }
     }
 

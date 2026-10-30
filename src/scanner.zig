@@ -10,6 +10,8 @@ pub const TokenType = enum {
     TOKEN_RIGHT_PAREN,
     TOKEN_LEFT_BRACE,
     TOKEN_RIGHT_BRACE,
+    TOKEN_LEFT_BRACKET,
+    TOKEN_RIGHT_BRACKET,
     TOKEN_COMMA,
     TOKEN_DOT,
     TOKEN_MINUS,
@@ -131,6 +133,8 @@ pub const Scanner = struct {
         return switch (ch) {
             '{' => self.createToken(TokenType.TOKEN_LEFT_BRACE),
             '}' => self.createToken(TokenType.TOKEN_RIGHT_BRACE),
+            '[' => self.createToken(TokenType.TOKEN_LEFT_BRACKET),
+            ']' => self.createToken(TokenType.TOKEN_RIGHT_BRACKET),
             '(' => self.createToken(TokenType.TOKEN_LEFT_PAREN),
             ')' => self.createToken(TokenType.TOKEN_RIGHT_PAREN),
             ';' => self.createToken(TokenType.TOKEN_SEMICOLON),

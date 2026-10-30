@@ -10,6 +10,7 @@ const ObjStr = value.ObjStr;
 const ObjFunction = value.ObjFunction;
 const ObjClosure = value.ObjClosure;
 const ObjUpvalue = value.ObjUpvalue;
+const ObjArray = value.ObjArray;
 
 pub const InterpretResult = enum {
     OK,
@@ -447,6 +448,18 @@ pub const VM = struct {
                     const offset = self.readShort(&ip);
                     ip -= offset;
                 },
+                OpCode.OP_ARRAY, OpCode.OP_ARRAY_LONG => {
+                    const len = if (instruction == .OP_ARRAY)
+                        self.readByte(&ip)
+                    else
+                        self.readMedium(&ip);
+                    const array: *ObjArray = try self.heap.createArray(len);
+                    const items = self.stack.values[self.stack.len - len .. self.stack.len];
+                    try array.values.appendSlice(self.heap.allocator, items);
+
+                    self.stack.shrinkRetainingCapacity(self.stack.len - len);
+                    try self.stack.append(.{ .array = array });
+                },
                 OpCode.ILLEGAL => {
                     return .{ .illegal_opcode = instruction_byte };
                 },
@@ -525,6 +538,8 @@ pub const VM = struct {
             } else if (self.checkNumberOperands()) {
                 const result = value.numberValue(self.stack.pop().?.number + self.stack.pop().?.number);
                 try self.stack.append(result);
+            } else if (self.checkArrayOperands()) {
+                try self.concatArrays();
             } else {
                 return .operands_must_be_numbers_or_strings;
             }
@@ -565,7 +580,18 @@ pub const VM = struct {
         try self.stack.append(v);
     }
 
-    fn valuesEqual(_: *VM, a: Value, b: Value) bool {
+    inline fn concatArrays(self: *VM) !void {
+        const b = self.peekStack(0).array;
+        const a = self.peekStack(1).array;
+
+        try self.heap.checkAndCollect();
+
+        try a.values.appendSlice(self.allocator, b.values.items);
+
+        _ = self.stack.pop();
+    }
+
+    fn valuesEqual(self: *VM, a: Value, b: Value) bool {
         if (std.meta.activeTag(a) != std.meta.activeTag(b)) {
             return false;
         }
@@ -578,6 +604,13 @@ pub const VM = struct {
             .function => |f| f == b.function,
             .native => |n| n == b.native,
             .closure => |c| c == b.closure,
+            .array => {
+                if (a.array.values.items.len != b.array.values.items.len) return false;
+                for (0..a.array.values.items.len) |i| {
+                    if (!self.valuesEqual(a.array.values.items[i], b.array.values.items[i])) return false;
+                }
+                return true;
+            },
         };
     }
 
@@ -636,6 +669,10 @@ pub const VM = struct {
 
     fn checkNumberOperands(self: *VM) bool {
         return value.isNumber(self.peekStack(0)) and value.isNumber(self.peekStack(1));
+    }
+
+    fn checkArrayOperands(self: *VM) bool {
+        return value.isArray(self.peekStack(0)) and value.isArray(self.peekStack(1));
     }
 
     fn peekStack(self: *VM, i: usize) Value {
@@ -715,6 +752,7 @@ pub fn strNative(vm: *VM, argCount: usize, args: []const Value) !Value {
         .function => try vm.heap.copyString("function"),
         .native => try vm.heap.copyString("native"),
         .closure => try vm.heap.copyString("function"),
+        .array => try vm.heap.copyString("array"),
     };
 
     return .{ .string = str };
@@ -893,6 +931,7 @@ inline fn isTruthy(v: Value) bool {
         .number => false,
         .nil => false,
         .string, .function, .native, .closure => false,
+        .array => v.array.values.items.len > 0,
     };
 }
 
@@ -902,5 +941,6 @@ inline fn isFalsey(v: Value) bool {
         .number => false,
         .nil => true,
         .string, .function, .native, .closure => true,
+        .array => v.array.values.items.len == 0,
     };
 }

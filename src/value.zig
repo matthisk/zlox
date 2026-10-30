@@ -15,6 +15,12 @@ pub const Value = union(enum) {
     function: *ObjFunction,
     native: *ObjNative,
     closure: *ObjClosure,
+    array: *ObjArray,
+};
+
+pub const ObjArray = struct {
+    obj: Obj = .{ .kind = .array },
+    values: std.ArrayList(Value) = .empty,
 };
 
 pub const ObjClosure = struct {
@@ -69,7 +75,7 @@ pub const ObjNative = struct {
 pub const Obj = struct {
     next: ?*Obj = null,
     marked: bool = false,
-    kind: enum { str, function, native, closure, upvalue },
+    kind: enum { str, function, native, closure, upvalue, array },
 
     pub fn mark(self: *Obj) void {
         self.marked = true;
@@ -96,6 +102,10 @@ pub const Obj = struct {
             .upvalue => {
                 const u: *ObjUpvalue = @fieldParentPtr("obj", self);
                 try writer.print("{f}", .{Formatter{ .value = u.closed }});
+            },
+            .array => {
+                const a: *ObjArray = @fieldParentPtr("obj", self);
+                try writer.print("{f}", .{Formatter{ .value = Value{ .array = a } }});
             },
         }
     }
@@ -128,6 +138,11 @@ pub const Obj = struct {
                 const u: *ObjUpvalue = @fieldParentPtr("obj", self);
                 allocator.destroy(u);
             },
+            .array => {
+                const a: *ObjArray = @fieldParentPtr("obj", self);
+                a.values.deinit(allocator);
+                allocator.destroy(a);
+            },
         }
     }
 };
@@ -152,6 +167,13 @@ pub inline fn nilValue() Value {
 pub inline fn isNumber(v: Value) bool {
     return switch (v) {
         .number => true,
+        else => false,
+    };
+}
+
+pub inline fn isArray(v: Value) bool {
+    return switch (v) {
+        .array => true,
         else => false,
     };
 }
@@ -233,6 +255,27 @@ pub const Formatter = struct {
             .native => {
                 try writer.print("<native>", .{});
             },
+            .array => {
+                const items = self.value.array.values.items;
+                const len = items.len;
+                const truncated = len > 8;
+
+                try writer.writeAll("[");
+
+                for (0..@min(len, 8)) |i| {
+                    if (i > 0) try writer.writeAll(", ");
+                    if (truncated and i == 4) try writer.writeAll("..., ");
+
+                    const index = if (truncated and i >= 4)
+                        len - 8 + i
+                    else
+                        i;
+
+                    try writer.print("{f}", .{Formatter{ .value = items[index] }});
+                }
+
+                try writer.writeAll("]");
+            },
         }
     }
 };
@@ -250,6 +293,7 @@ pub fn write(v: Value, writer: *std.Io.Writer) std.Io.Writer.Error!void {
         .function => |f| try writer.writeAll(f.name.chars),
         .native => try writer.writeAll("<native_fn>"),
         .closure => |c| try writer.writeAll(c.function.name.chars),
+        .array => try writer.print("{f}", .{Formatter{ .value = v }}),
     }
 }
 

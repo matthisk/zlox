@@ -4,6 +4,8 @@ const Value = value_mod.Value;
 const ObjFunction = value_mod.ObjFunction;
 
 pub const OpCode = enum(u8) {
+    OP_ARRAY,
+    OP_ARRAY_LONG,
     OP_RETURN,
     OP_TRUE,
     OP_FALSE,
@@ -64,11 +66,11 @@ pub const Chunk = struct {
                 tag_name;
 
             switch (op) {
-                .OP_POPN, .OP_CALL => {
+                .OP_POPN, .OP_CALL, .OP_ARRAY => {
                     const n = self.chunk.code.items[self.offset + 1];
                     try writer.print("{s} [{d}]", .{ name, n });
                 },
-                .OP_POPN_LONG => {
+                .OP_POPN_LONG, .OP_ARRAY_LONG => {
                     const bytes = self.chunk.code.items[self.offset + 1 ..][0..3];
                     const n = std.mem.readInt(u24, bytes, .big);
                     try writer.print("{s} [{d}]", .{ name, n });
@@ -225,8 +227,8 @@ pub const Chunk = struct {
     pub fn instructionLength(self: *const Chunk, offset: usize) usize {
         const op = std.enums.fromInt(OpCode, self.code.items[offset]) orelse return 1;
         return switch (op) {
-            .OP_CONSTANT, .OP_CALL, .OP_DEFINE_GLOBAL, .OP_GET_GLOBAL, .OP_SET_GLOBAL => 2,
-            .OP_CONSTANT_LONG, .OP_DEFINE_GLOBAL_LONG, .OP_GET_LOCAL, .OP_SET_LOCAL, .OP_GET_GLOBAL_LONG, .OP_SET_GLOBAL_LONG, .OP_GET_UPVALUE, .OP_SET_UPVALUE => 4,
+            .OP_CONSTANT, .OP_CALL, .OP_DEFINE_GLOBAL, .OP_GET_GLOBAL, .OP_SET_GLOBAL, .OP_ARRAY => 2,
+            .OP_ARRAY_LONG, .OP_CONSTANT_LONG, .OP_DEFINE_GLOBAL_LONG, .OP_GET_LOCAL, .OP_SET_LOCAL, .OP_GET_GLOBAL_LONG, .OP_SET_GLOBAL_LONG, .OP_GET_UPVALUE, .OP_SET_UPVALUE => 4,
             .OP_JUMP_IF_FALSE, .OP_JUMP, .OP_LOOP => 3,
             .OP_CLOSURE, .OP_CLOSURE_LONG => {
                 const operandLength: usize = if (op == .OP_CLOSURE) 1 else 3;
