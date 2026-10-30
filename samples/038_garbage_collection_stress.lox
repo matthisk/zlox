@@ -1,0 +1,41 @@
+// Builds a small graph of strings, closures, and captured variables.
+// The returned closure keeps only `third` alive; the intermediate strings and
+// the makeInner closure can be collected as soon as this function returns.
+fun makeObjectGraph(seed) {
+  var first = seed + "-first";
+  var second = first + "-second";
+
+  fun makeInner() {
+    var third = second + "-third";
+
+    fun inner() {
+      return third + "-result";
+    }
+
+    return inner;
+  }
+
+  return makeInner();
+}
+
+// This object graph must survive every collection performed by the loop.
+var kept = makeObjectGraph("kept");
+
+// Each iteration creates temporary strings, closures, and upvalues. The
+// discarded closure is reachable while it is called, then becomes garbage at
+// the end of the block. Reusing the same text also exercises weak interning:
+// interned strings must not keep otherwise unreachable strings alive.
+for (var batch = 0; batch < 10; batch = batch + 1) {
+  for (var iteration = 0; iteration < 1000; iteration = iteration + 1) {
+    {
+      var discarded = makeObjectGraph("temporary");
+      discarded();
+    }
+  }
+
+  // Keep the normal output small while making long runs visibly progress.
+  print batch;
+}
+
+// Prove that the object graph retained through a global still works.
+print kept();

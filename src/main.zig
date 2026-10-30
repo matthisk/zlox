@@ -9,6 +9,7 @@ comptime {
         _ = @import("vm.zig");
         _ = @import("chunk.zig");
         _ = @import("heap.zig");
+        _ = @import("tracking_allocator.zig");
         _ = @import("value.zig");
     }
 }

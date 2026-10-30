@@ -130,10 +130,11 @@ pub const VM = struct {
             .io = io,
             .allocator = allocator,
             .stack = .{},
-            .heap = Heap.init(allocator),
+            .heap = try Heap.init(allocator),
             .globals = std.AutoHashMap(*ObjStr, Value).init(allocator),
             .frameCount = 0,
         };
+        errdefer vm.deinit();
 
         try vm.defineNative("clock", 0, clockNative);
         try vm.defineNative("random", 0, randomNative);
@@ -197,7 +198,9 @@ pub const VM = struct {
 
         var instruction_count: usize = 0;
         while (true) {
-            try self.heap.collectGarbage(self);
+            if (self.heap.shouldCollectGarbage()) {
+                try self.heap.collectGarbage(self);
+            }
 
             const instruction_offset = @intFromPtr(ip) - @intFromPtr(code);
             if (comptime DEBUG_VM) {
@@ -536,7 +539,7 @@ pub const VM = struct {
         const b = self.stack.pop().?.string.chars;
         const a = self.stack.pop().?.string.chars;
 
-        const chars = try std.mem.concat(self.allocator, u8, &[_][]const u8{ a, b });
+        const chars = try std.mem.concat(self.heap.allocator, u8, &[_][]const u8{ a, b });
         const v: Value = .{ .string = try self.heap.takeString(chars) };
 
         try self.stack.append(v);
@@ -670,7 +673,7 @@ pub fn strNative(vm: *VM, argCount: usize, args: []const Value) !Value {
     const v = args[0];
     const str = switch (v) {
         .bool => |b| try vm.heap.copyString(if (b) "true" else "false"),
-        .number => |n| try vm.heap.takeString(try std.fmt.allocPrint(vm.allocator, "{d}", .{n})),
+        .number => |n| try vm.heap.takeString(try std.fmt.allocPrint(vm.heap.allocator, "{d}", .{n})),
         .nil => try vm.heap.copyString("nil"),
         .string => |s| s,
         .function => try vm.heap.copyString("function"),

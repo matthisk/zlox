@@ -3,6 +3,7 @@ const config = @import("config");
 const value_mod = @import("value.zig");
 const VM = @import("vm.zig").VM;
 const Compiler = @import("compiler.zig").Compiler;
+const TrackingAllocator = @import("tracking_allocator.zig").TrackingAllocator;
 
 const Value = value_mod.Value;
 const Obj = value_mod.Obj;
@@ -13,22 +14,37 @@ const ObjUpvalue = value_mod.ObjUpvalue;
 const ObjStr = value_mod.ObjStr;
 
 const DEBUG_GC = config.debug_gc;
+const INITIAL_GC_THRESHOLD = 1024 * 1024;
 
 /// Owns heap allocated runtime objects and their linked list.
 ///
 /// Each allocation embeds an Obj header for registration and destruction.
 pub const Heap = struct {
+    trackingAllocator: *TrackingAllocator,
     allocator: std.mem.Allocator,
     objects: ?*Obj = null,
     strings: std.StringHashMap(*ObjStr),
     grayStack: std.ArrayList(*Obj),
+    nextGC: usize = INITIAL_GC_THRESHOLD,
 
-    pub fn init(allocator: std.mem.Allocator) Heap {
+    pub fn init(childAllocator: std.mem.Allocator) !Heap {
+        // Allocator interfaces point at their implementation state. Keeping
+        // that state separately allocated lets Heap move without invalidating
+        // the interface stored by objects and collections.
+        const trackingAllocator = try childAllocator.create(TrackingAllocator);
+        trackingAllocator.* = TrackingAllocator.init(childAllocator);
+        const allocator = trackingAllocator.allocator();
+
         return .{
+            .trackingAllocator = trackingAllocator,
             .allocator = allocator,
             .strings = std.StringHashMap(*ObjStr).init(allocator),
             .grayStack = .empty,
         };
+    }
+
+    pub fn shouldCollectGarbage(self: *const Heap) bool {
+        return self.trackingAllocator.bytesAllocated > self.nextGC;
     }
 
     /// Core garbage collection loop.
@@ -39,10 +55,22 @@ pub const Heap = struct {
 
         try self.markRoots(vm);
         try self.traceReferences();
+        self.removeWhiteInternedStrings();
         self.sweep();
+        self.nextGC = std.math.mul(usize, self.trackingAllocator.bytesAllocated, 2) catch std.math.maxInt(usize);
 
         if (comptime DEBUG_GC) {
             std.debug.print("-- gc end\n", .{});
+        }
+    }
+
+    pub fn removeWhiteInternedStrings(self: *Heap) void {
+        var object = self.objects;
+        while (object) |current| : (object = current.next) {
+            if (current.kind == .str and !current.marked) {
+                const string: *ObjStr = @fieldParentPtr("obj", current);
+                _ = self.strings.remove(string.chars);
+            }
         }
     }
 
@@ -233,7 +261,7 @@ pub const Heap = struct {
         return self.takeString(owned_chars);
     }
 
-    /// Return an interned string, adopting the caller's allocator-owned buffer.
+    /// Return an interned string, adopting a buffer owned by this heap's allocator.
     /// Ownership transfers on entry: the buffer is freed on a duplicate or
     /// any error, and is otherwise released by `deinit`.
     pub fn takeString(self: *Heap, chars: []u8) !*ObjStr {
@@ -271,11 +299,14 @@ pub const Heap = struct {
             object = next;
         }
         self.objects = null;
+
+        const childAllocator = self.trackingAllocator.childAllocator;
+        childAllocator.destroy(self.trackingAllocator);
     }
 };
 
 test "heap registers and destroys allocated objects" {
-    var heap = Heap.init(std.testing.allocator);
+    var heap = try Heap.init(std.testing.allocator);
     const object = try heap.copyString("test");
     try std.testing.expect(heap.objects == &object.obj);
     try std.testing.expect(object.obj.next == null);
@@ -284,7 +315,7 @@ test "heap registers and destroys allocated objects" {
 }
 
 test "heap creates and owns function objects" {
-    var heap = Heap.init(std.testing.allocator);
+    var heap = try Heap.init(std.testing.allocator);
     var name = ObjStr{ .chars = "<script>" };
     const object = try heap.createFunction(&name);
     const function = object;
@@ -297,7 +328,7 @@ test "heap creates and owns function objects" {
 }
 
 test "heap copies and interns strings" {
-    var heap = Heap.init(std.testing.allocator);
+    var heap = try Heap.init(std.testing.allocator);
     defer heap.deinit();
 
     const first = try heap.copyString("hello");
@@ -307,20 +338,20 @@ test "heap copies and interns strings" {
 }
 
 test "heap adopts strings and frees duplicate buffers" {
-    var heap = Heap.init(std.testing.allocator);
+    var heap = try Heap.init(std.testing.allocator);
     defer heap.deinit();
 
-    const adopted_chars = try std.testing.allocator.dupe(u8, "owned");
+    const adopted_chars = try heap.allocator.dupe(u8, "owned");
     const adopted = try heap.takeString(adopted_chars);
     try std.testing.expectEqualStrings("owned", adopted.chars);
 
-    const duplicate_chars = try std.testing.allocator.dupe(u8, "owned");
+    const duplicate_chars = try heap.allocator.dupe(u8, "owned");
     const duplicate = try heap.takeString(duplicate_chars);
     try std.testing.expect(adopted == duplicate);
 }
 
 fn exerciseObjectAllocations(allocator: std.mem.Allocator) !void {
-    var heap = Heap.init(allocator);
+    var heap = try Heap.init(allocator);
     defer heap.deinit();
 
     const name = try heap.copyString("function");

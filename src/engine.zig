@@ -308,3 +308,8 @@ test "036 callable equality uses identity" {
         try std.testing.expectEqual(true, result.bool);
     }
 }
+
+test "038 garbage collection stress" {
+    const result = try executeTestFile(std.testing.allocator, "038_garbage_collection_stress.lox");
+    try std.testing.expectEqual(InterpretResult.OK, result);
+}
