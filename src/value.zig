@@ -65,6 +65,7 @@ pub const ObjNative = struct {
     function: NativeFn,
 };
 
+// Obj: sizeOf = 16 bytes
 pub const Obj = struct {
     next: ?*Obj = null,
     marked: bool = false,
