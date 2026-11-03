@@ -406,6 +406,14 @@ pub const VM = struct {
 
                     try self.stack.append(.{ .class = try self.heap.createClass(name.string) });
                 },
+                OpCode.OP_METHOD, OpCode.OP_METHOD_LONG => {
+                    const name = if (instruction == .OP_METHOD)
+                        self.readConstant(&ip, constants)
+                    else
+                        self.readLongConstant(&ip, constants);
+
+                    try self.defineMethod(name.string);
+                },
                 OpCode.OP_GET_PROPERTY, OpCode.OP_GET_PROPERTY_LONG => {
                     const name = if (instruction == .OP_GET_PROPERTY)
                         self.readConstant(&ip, constants)
@@ -509,6 +517,13 @@ pub const VM = struct {
                 },
             }
         }
+    }
+
+    inline fn defineMethod(self: *VM, name: *ObjStr) !void {
+        const method = self.peekStack(0);
+        const class = self.peekStack(1).class;
+        try class.methods.put(name, method);
+        _ = self.stack.pop();
     }
 
     inline fn closeUpvalues(self: *VM, last: *Value) void {

@@ -28,6 +28,7 @@ pub const ObjArray = struct {
 pub const ObjClass = struct {
     obj: Obj = .{ .kind = .class },
     name: *ObjStr,
+    methods: std.AutoHashMap(*ObjStr, Value),
 };
 
 pub const ObjInstance = struct {
@@ -166,6 +167,7 @@ pub const Obj = struct {
             },
             .class => {
                 const c: *ObjClass = @fieldParentPtr("obj", self);
+                c.methods.deinit();
                 allocator.destroy(c);
             },
             .instance => {

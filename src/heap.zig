@@ -252,7 +252,7 @@ pub const Heap = struct {
         try self.checkAndCollect();
 
         const class = try self.allocator.create(ObjClass);
-        class.* = .{ .name = name };
+        class.* = .{ .name = name, .methods = std.AutoHashMap(*ObjStr, Value).init(self.allocator) };
 
         self.register(&class.obj);
 

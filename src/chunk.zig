@@ -4,6 +4,8 @@ const Value = value_mod.Value;
 const ObjFunction = value_mod.ObjFunction;
 
 pub const OpCode = enum(u8) {
+    OP_METHOD,
+    OP_METHOD_LONG,
     OP_GET_PROPERTY,
     OP_GET_PROPERTY_LONG,
     OP_SET_PROPERTY,
@@ -81,11 +83,11 @@ pub const Chunk = struct {
                     const n = std.mem.readInt(u24, bytes, .big);
                     try writer.print("{s} [{d}]", .{ name, n });
                 },
-                .OP_CONSTANT, .OP_DEFINE_GLOBAL, .OP_GET_GLOBAL, .OP_SET_GLOBAL, .OP_CLASS, .OP_GET_PROPERTY, .OP_SET_PROPERTY => {
+                .OP_CONSTANT, .OP_DEFINE_GLOBAL, .OP_GET_GLOBAL, .OP_SET_GLOBAL, .OP_CLASS, .OP_GET_PROPERTY, .OP_SET_PROPERTY, .OP_METHOD => {
                     const index = self.chunk.code.items[self.offset + 1];
                     try writer.print("{s} [{d}] {f}", .{ name, index, value_mod.format(self.chunk.data.items[index]) });
                 },
-                .OP_CONSTANT_LONG, .OP_DEFINE_GLOBAL_LONG, .OP_GET_GLOBAL_LONG, .OP_SET_GLOBAL_LONG, .OP_CLASS_LONG, .OP_GET_PROPERTY_LONG, .OP_SET_PROPERTY_LONG => {
+                .OP_CONSTANT_LONG, .OP_DEFINE_GLOBAL_LONG, .OP_GET_GLOBAL_LONG, .OP_SET_GLOBAL_LONG, .OP_CLASS_LONG, .OP_GET_PROPERTY_LONG, .OP_SET_PROPERTY_LONG, .OP_METHOD_LONG => {
                     const bytes = self.chunk.code.items[self.offset + 1 ..][0..3];
                     const index = std.mem.readInt(u24, bytes, .big);
                     try writer.print("{s} [{d}] {f}", .{ name, index, value_mod.format(self.chunk.data.items[index]) });
@@ -233,8 +235,8 @@ pub const Chunk = struct {
     pub fn instructionLength(self: *const Chunk, offset: usize) usize {
         const op = std.enums.fromInt(OpCode, self.code.items[offset]) orelse return 1;
         return switch (op) {
-            .OP_CONSTANT, .OP_CALL, .OP_DEFINE_GLOBAL, .OP_GET_GLOBAL, .OP_SET_GLOBAL, .OP_ARRAY, .OP_CLASS, .OP_GET_PROPERTY, .OP_SET_PROPERTY => 2,
-            .OP_ARRAY_LONG, .OP_CONSTANT_LONG, .OP_DEFINE_GLOBAL_LONG, .OP_GET_LOCAL, .OP_SET_LOCAL, .OP_GET_GLOBAL_LONG, .OP_SET_GLOBAL_LONG, .OP_GET_UPVALUE, .OP_SET_UPVALUE, .OP_CLASS_LONG, .OP_SET_PROPERTY_LONG, .OP_GET_PROPERTY_LONG => 4,
+            .OP_CONSTANT, .OP_CALL, .OP_DEFINE_GLOBAL, .OP_GET_GLOBAL, .OP_SET_GLOBAL, .OP_ARRAY, .OP_CLASS, .OP_GET_PROPERTY, .OP_SET_PROPERTY, .OP_METHOD => 2,
+            .OP_ARRAY_LONG, .OP_CONSTANT_LONG, .OP_DEFINE_GLOBAL_LONG, .OP_GET_LOCAL, .OP_SET_LOCAL, .OP_GET_GLOBAL_LONG, .OP_SET_GLOBAL_LONG, .OP_GET_UPVALUE, .OP_SET_UPVALUE, .OP_CLASS_LONG, .OP_SET_PROPERTY_LONG, .OP_GET_PROPERTY_LONG, .OP_METHOD_LONG => 4,
             .OP_JUMP_IF_FALSE, .OP_JUMP, .OP_LOOP => 3,
             .OP_CLOSURE, .OP_CLOSURE_LONG => {
                 const operandLength: usize = if (op == .OP_CLOSURE) 1 else 3;

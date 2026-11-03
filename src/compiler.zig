@@ -262,47 +262,52 @@ pub const Compiler = struct {
 
     fn classDeclaration(self: *Compiler) !void {
         self.consume(TokenType.TOKEN_IDENTIFIER, "Expect class name.");
+        const className = self.previous;
         const idx = try self.identifierConstant();
         try self.declareVariable();
         try self.emitConstantOperand(OpCode.OP_CLASS, OpCode.OP_CLASS_LONG, idx);
         try self.defineVariable(idx);
 
+        try self.namedVariable(false, className.lexeme);
+
         self.consume(TokenType.TOKEN_LEFT_BRACE, "Expect '{' before class body.");
+
+        while (!self.check(TokenType.TOKEN_RIGHT_BRACE) and !self.check(TokenType.TOKEN_EOF)) {
+            try self.method();
+        }
         self.consume(TokenType.TOKEN_RIGHT_BRACE, "Expect '}' after class body.");
+
+        try self.emitOp(OpCode.OP_POP);
+    }
+
+    fn method(self: *Compiler) !void {
+        self.consume(TokenType.TOKEN_IDENTIFIER, "Expect method name.");
+        const name = try self.identifierConstant();
+        try self.function(FunctionType.FUNCTION);
+        try self.emitConstantOperand(OpCode.OP_METHOD, OpCode.OP_METHOD_LONG, name);
     }
 
     fn funDeclaration(self: *Compiler) !void {
         const global = try self.parseVariable("Expect function name.");
-
-        var inner = try Compiler.init(self.io, self.allocator, self.scanner, self.vm, self, FunctionType.FUNCTION);
-        defer inner.deinit();
-
-        const value = try inner.fun();
-
-        const i = try self.makeConstant(value);
-        if (i <= 0xFF) {
-            try self.emitOpWithByteOperand(OpCode.OP_CLOSURE, @intCast(i));
-        } else {
-            try self.emitOpWithMediumOperand(OpCode.OP_CLOSURE_LONG, i);
-        }
-        for (0..inner.functionObject.upvalueCount) |j| {
-            try self.emitByte(if (inner.upvalues[j].isLocal) 1 else 0);
-            try self.emitMedium(inner.upvalues[j].index);
-        }
+        try self.function(FunctionType.FUNCTION);
         try self.defineVariable(global);
-
-        self.current = inner.current;
-        self.previous = inner.previous;
     }
 
-    fn fun(self: *Compiler) !Value {
+    fn function(self: *Compiler, fType: FunctionType) !void {
+        var inner = try Compiler.init(self.io, self.allocator, self.scanner, self.vm, self, fType);
+        try inner._function();
+        try self.emitConstantOperand(OpCode.OP_CLOSURE, OpCode.OP_CLOSURE_LONG, try self.makeConstant(.{ .function = inner.endCompiler() }));
+    }
+
+    fn _function(self: *Compiler) !void {
+        // TODO: There must be some more elegant way to supply the current compiler to the heap.
         const previousCompiler = self.vm.heap.compiler;
         self.vm.heap.compiler = self;
         defer self.vm.heap.compiler = previousCompiler;
 
         self.beginScope();
-
         self.consume(TokenType.TOKEN_LEFT_PAREN, "Expect '(' after function name.");
+
         if (!self.check(TokenType.TOKEN_RIGHT_PAREN)) {
             while (true) {
                 self.currentFunction().arity += 1;
@@ -320,11 +325,18 @@ pub const Compiler = struct {
 
         self.consume(TokenType.TOKEN_RIGHT_PAREN, "Expect ')' after parameters.");
         self.consume(TokenType.TOKEN_LEFT_BRACE, "Expect '{' before function body.");
+
         try self.block();
-
         try self.emitReturn();
+    }
 
-        return .{ .function = self.functionObject };
+    fn endCompiler(self: *Compiler) *ObjFunction {
+        defer self.deinit();
+        if (self.enclosing != null) {
+            self.enclosing.?.current = self.current;
+            self.enclosing.?.previous = self.previous;
+        }
+        return self.functionObject;
     }
 
     fn statement(self: *Compiler) anyerror!void {
