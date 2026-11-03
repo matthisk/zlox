@@ -11,6 +11,7 @@ const ObjFunction = value.ObjFunction;
 const ObjClosure = value.ObjClosure;
 const ObjUpvalue = value.ObjUpvalue;
 const ObjArray = value.ObjArray;
+const ObjClass = value.ObjClass;
 
 pub const InterpretResult = enum {
     OK,
@@ -420,12 +421,13 @@ pub const VM = struct {
                     else
                         self.readLongConstant(&ip, constants);
 
-                    const instance = self.stack.pop().?;
-                    if (value.isInstance(instance)) {
-                        if (instance.instance.fields.get(name.string)) |v| {
-                            try self.stack.append(v);
-                        } else {
-                            return .{ .unknown_property = .{ .name = name.string.chars } };
+                    const v = self.stack.pop().?;
+                    if (value.isInstance(v)) {
+                        const instance = v.instance;
+                        if (instance.fields.get(name.string)) |val| {
+                            try self.stack.append(val);
+                        } else if (try self.bindMethod(instance.class, name.string)) |err| {
+                            return err;
                         }
                     } else {
                         return .not_assignable;
@@ -522,8 +524,19 @@ pub const VM = struct {
     inline fn defineMethod(self: *VM, name: *ObjStr) !void {
         const method = self.peekStack(0);
         const class = self.peekStack(1).class;
-        try class.methods.put(name, method);
+        try class.methods.put(name, method.closure);
         _ = self.stack.pop();
+    }
+
+    inline fn bindMethod(self: *VM, class: *ObjClass, name: *ObjStr) !?RuntimeFault {
+        const method = class.methods.get(name);
+        if (method == null) return .{ .unknown_property = .{ .name = name.chars } };
+
+        const bound = try self.heap.createBoundMethod(self.peekStack(0), method.?);
+        _ = self.stack.pop();
+        try self.stack.append(.{ .bound_method = bound });
+
+        return null;
     }
 
     inline fn closeUpvalues(self: *VM, last: *Value) void {
@@ -681,6 +694,15 @@ pub const VM = struct {
             .class => |class| {
                 try self.stack.append(.{ .instance = try self.heap.createInstance(class) });
                 return null;
+            },
+            .bound_method => |method| {
+                if (argCount != method.method.function.arity) {
+                    return .{ .expected_arguments = .{
+                        .expected = method.method.function.arity,
+                        .actual = argCount,
+                    } };
+                }
+                return try self.call(method.method, argCount);
             },
             .closure => |closure| {
                 if (argCount != closure.function.arity) {

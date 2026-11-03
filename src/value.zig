@@ -29,7 +29,7 @@ pub const ObjArray = struct {
 pub const ObjClass = struct {
     obj: Obj = .{ .kind = .class },
     name: *ObjStr,
-    methods: std.AutoHashMap(*ObjStr, Value),
+    methods: std.AutoHashMap(*ObjStr, *ObjClosure),
 };
 
 pub const ObjInstance = struct {
