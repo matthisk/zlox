@@ -15,6 +15,7 @@ const ObjStr = value_mod.ObjStr;
 const ObjArray = value_mod.ObjArray;
 const ObjClass = value_mod.ObjClass;
 const ObjInstance = value_mod.ObjInstance;
+const ObjBoundMethod = value_mod.ObjBoundMethod;
 
 const DEBUG_GC = config.debug_gc;
 const INITIAL_GC_THRESHOLD = 1024 * 1024;
@@ -198,6 +199,11 @@ pub const Heap = struct {
                     try self.markValue(entry.value_ptr.*);
                 }
             },
+            .bound_method => {
+                const bound: *ObjBoundMethod = @fieldParentPtr("obj", obj);
+                try self.markValue(bound.receiver);
+                try self.markObj(&bound.method.obj);
+            },
             else => {},
         }
     }
@@ -211,6 +217,7 @@ pub const Heap = struct {
             .array => |a| try self.markObj(&a.obj),
             .class => |c| try self.markObj(&c.obj),
             .instance => |i| try self.markObj(&i.obj),
+            .bound_method => |b| try self.markObj(&b.obj),
             else => {},
         }
     }
@@ -280,6 +287,23 @@ pub const Heap = struct {
         }
 
         return instance;
+    }
+
+    /// The receiver and the method must remain alive for the lifetime of the
+    /// bound method.
+    pub fn createBoundMethod(self: *Heap, receiver: Value, method: *ObjClosure) !*ObjBoundMethod {
+        try self.checkAndCollect();
+
+        const bound = try self.allocator.create(ObjBoundMethod);
+        bound.* = .{ .receiver = receiver, .method = method };
+
+        self.register(&bound.obj);
+
+        if (comptime DEBUG_GC) {
+            std.debug.print("{*} allocate {d} for {s}\n", .{ bound, @sizeOf(ObjBoundMethod), "<bound method>" });
+        }
+
+        return bound;
     }
 
     /// The name must remain alive for the lifetime of the function.
@@ -468,8 +492,10 @@ fn exerciseObjectAllocations(allocator: std.mem.Allocator) !void {
     const instance = try heap.createInstance(class);
     const fieldName = try heap.copyString("field");
     try instance.fields.put(fieldName, .{ .number = 42 });
+    const bound = try heap.createBoundMethod(.{ .instance = instance }, closure);
 
-    try std.testing.expect(heap.objects == &fieldName.obj);
+    try std.testing.expect(heap.objects == &bound.obj);
+    try std.testing.expect(bound.obj.next == &fieldName.obj);
     try std.testing.expect(fieldName.obj.next == &instance.obj);
     try std.testing.expect(instance.obj.next == &class.obj);
     try std.testing.expect(class.obj.next == &className.obj);
@@ -480,6 +506,8 @@ fn exerciseObjectAllocations(allocator: std.mem.Allocator) !void {
     try std.testing.expect(function.obj.next == &name.obj);
     try std.testing.expect(closure.upvalues[0].location == &local);
     try std.testing.expectEqual(@as(f64, 42), instance.fields.get(fieldName).?.number);
+    try std.testing.expect(bound.method == closure);
+    try std.testing.expect(bound.receiver.instance == instance);
 }
 
 test "instance keeps its class and fields reachable" {
@@ -500,6 +528,28 @@ test "instance keeps its class and fields reachable" {
     try std.testing.expect(className.obj.marked);
     try std.testing.expect(fieldName.obj.marked);
     try std.testing.expect(fieldValue.obj.marked);
+}
+
+test "bound method keeps its receiver and method reachable" {
+    var heap = try Heap.init(std.testing.allocator);
+    defer heap.deinit();
+
+    const className = try heap.copyString("Bag");
+    const class = try heap.createClass(className);
+    const instance = try heap.createInstance(class);
+    const functionName = try heap.copyString("get");
+    const function = try heap.createFunction(functionName);
+    const closure = try heap.createClosure(function);
+    const bound = try heap.createBoundMethod(.{ .instance = instance }, closure);
+
+    try heap.markObj(&bound.obj);
+    try heap.traceReferences();
+
+    try std.testing.expect(instance.obj.marked);
+    try std.testing.expect(class.obj.marked);
+    try std.testing.expect(closure.obj.marked);
+    try std.testing.expect(function.obj.marked);
+    try std.testing.expect(functionName.obj.marked);
 }
 
 fn testNative(_: *@import("vm.zig").VM, _: usize, _: []const Value) !Value {

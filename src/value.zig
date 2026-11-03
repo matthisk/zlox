@@ -18,6 +18,7 @@ pub const Value = union(enum) {
     array: *ObjArray,
     class: *ObjClass,
     instance: *ObjInstance,
+    bound_method: *ObjBoundMethod,
 };
 
 pub const ObjArray = struct {
@@ -35,6 +36,12 @@ pub const ObjInstance = struct {
     obj: Obj = .{ .kind = .instance },
     class: *ObjClass,
     fields: std.AutoHashMap(*ObjStr, Value),
+};
+
+pub const ObjBoundMethod = struct {
+    obj: Obj = .{ .kind = .bound_method },
+    receiver: Value,
+    method: *ObjClosure,
 };
 
 pub const ObjClosure = struct {
@@ -89,7 +96,7 @@ pub const ObjNative = struct {
 pub const Obj = struct {
     next: ?*Obj = null,
     marked: bool = false,
-    kind: enum { str, function, native, closure, upvalue, array, class, instance },
+    kind: enum { str, function, native, closure, upvalue, array, class, instance, bound_method },
 
     pub fn mark(self: *Obj) void {
         self.marked = true;
@@ -128,6 +135,10 @@ pub const Obj = struct {
             .instance => {
                 const i: *ObjInstance = @fieldParentPtr("obj", self);
                 try writer.print("{f}", .{Formatter{ .value = Value{ .instance = i } }});
+            },
+            .bound_method => {
+                const b: *ObjBoundMethod = @fieldParentPtr("obj", self);
+                try writer.print("{f}", .{Formatter{ .value = Value{ .bound_method = b } }});
             },
         }
     }
@@ -175,6 +186,10 @@ pub const Obj = struct {
                 i.fields.deinit();
                 allocator.destroy(i);
             },
+            .bound_method => {
+                const b: *ObjBoundMethod = @fieldParentPtr("obj", self);
+                allocator.destroy(b);
+            },
         }
     }
 };
@@ -218,6 +233,10 @@ pub inline fn isInstance(v: Value) bool {
     return v == .instance;
 }
 
+pub inline fn isBoundMethod(v: Value) bool {
+    return v == .bound_method;
+}
+
 pub inline fn isBool(v: Value) bool {
     return switch (v) {
         .bool => true,
@@ -254,6 +273,10 @@ pub inline fn asClass(v: Value) *ObjClass {
 
 pub inline fn asInstance(v: Value) *ObjInstance {
     return v.instance;
+}
+
+pub inline fn asBoundMethod(v: Value) *ObjBoundMethod {
+    return v.bound_method;
 }
 
 pub inline fn asStr(v: Value) []const u8 {
@@ -326,6 +349,7 @@ pub const Formatter = struct {
             },
             .class => |class| try writer.print("<class {s}>", .{class.name.chars}),
             .instance => |instance| try writer.print("<{s} instance>", .{instance.class.name.chars}),
+            .bound_method => |bound| try writer.print("<bound {s}>", .{bound.method.function.name.chars}),
         }
     }
 };
@@ -346,6 +370,7 @@ pub fn write(v: Value, writer: *std.Io.Writer) std.Io.Writer.Error!void {
         .array => try writer.print("{f}", .{Formatter{ .value = v }}),
         .class => |class| try writer.writeAll(class.name.chars),
         .instance => |instance| try writer.print("{s} instance", .{instance.class.name.chars}),
+        .bound_method => |bound| try writer.writeAll(bound.method.function.name.chars),
     }
 }
 

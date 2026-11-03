@@ -665,6 +665,7 @@ pub const VM = struct {
             .closure => |c| c == b.closure,
             .class => |class| class == b.class,
             .instance => |instance| instance == b.instance,
+            .bound_method => |bound| bound == b.bound_method,
             .array => {
                 if (a.array.values.items.len != b.array.values.items.len) return false;
                 for (0..a.array.values.items.len) |i| {
@@ -820,6 +821,7 @@ pub fn strNative(vm: *VM, argCount: usize, args: []const Value) !Value {
         .array => try vm.heap.copyString("array"),
         .class => try vm.heap.copyString("class"),
         .instance => try vm.heap.copyString("instance"),
+        .bound_method => try vm.heap.copyString("function"),
     };
 
     return .{ .string = str };
@@ -997,7 +999,7 @@ inline fn isTruthy(v: Value) bool {
         .bool => v.bool,
         .number => false,
         .nil => false,
-        .string, .function, .native, .closure, .class, .instance => false,
+        .string, .function, .native, .closure, .class, .instance, .bound_method => false,
         .array => v.array.values.items.len > 0,
     };
 }
@@ -1007,7 +1009,7 @@ inline fn isFalsey(v: Value) bool {
         .bool => !v.bool,
         .number => false,
         .nil => true,
-        .string, .function, .native, .closure, .class, .instance => true,
+        .string, .function, .native, .closure, .class, .instance, .bound_method => true,
         .array => v.array.values.items.len == 0,
     };
 }
