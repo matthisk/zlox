@@ -13,6 +13,8 @@ const ObjClosure = value_mod.ObjClosure;
 const ObjUpvalue = value_mod.ObjUpvalue;
 const ObjStr = value_mod.ObjStr;
 const ObjArray = value_mod.ObjArray;
+const ObjClass = value_mod.ObjClass;
+const ObjInstance = value_mod.ObjInstance;
 
 const DEBUG_GC = config.debug_gc;
 const INITIAL_GC_THRESHOLD = 1024 * 1024;
@@ -183,6 +185,19 @@ pub const Heap = struct {
                     try self.markValue(value);
                 }
             },
+            .class => {
+                const class: *ObjClass = @fieldParentPtr("obj", obj);
+                try self.markObj(&class.name.obj);
+            },
+            .instance => {
+                const instance: *ObjInstance = @fieldParentPtr("obj", obj);
+                try self.markObj(&instance.class.obj);
+                var fields = instance.fields.iterator();
+                while (fields.next()) |entry| {
+                    try self.markObj(&entry.key_ptr.*.obj);
+                    try self.markValue(entry.value_ptr.*);
+                }
+            },
             else => {},
         }
     }
@@ -194,6 +209,8 @@ pub const Heap = struct {
             .native => |n| try self.markObj(&n.obj),
             .string => |s| try self.markObj(&s.obj),
             .array => |a| try self.markObj(&a.obj),
+            .class => |c| try self.markObj(&c.obj),
+            .instance => |i| try self.markObj(&i.obj),
             else => {},
         }
     }
@@ -228,6 +245,41 @@ pub const Heap = struct {
         }
 
         return array;
+    }
+
+    /// The name must remain alive for the lifetime of the class.
+    pub fn createClass(self: *Heap, name: *ObjStr) !*ObjClass {
+        try self.checkAndCollect();
+
+        const class = try self.allocator.create(ObjClass);
+        class.* = .{ .name = name };
+
+        self.register(&class.obj);
+
+        if (comptime DEBUG_GC) {
+            std.debug.print("{*} allocate {d} for {s}\n", .{ class, @sizeOf(ObjClass), "<class>" });
+        }
+
+        return class;
+    }
+
+    /// The class must remain alive for the lifetime of the instance.
+    pub fn createInstance(self: *Heap, class: *ObjClass) !*ObjInstance {
+        try self.checkAndCollect();
+
+        const instance = try self.allocator.create(ObjInstance);
+        instance.* = .{
+            .class = class,
+            .fields = std.AutoHashMap(*ObjStr, Value).init(self.allocator),
+        };
+
+        self.register(&instance.obj);
+
+        if (comptime DEBUG_GC) {
+            std.debug.print("{*} allocate {d} for {s}\n", .{ instance, @sizeOf(ObjInstance), "<instance>" });
+        }
+
+        return instance;
     }
 
     /// The name must remain alive for the lifetime of the function.
@@ -411,13 +463,43 @@ fn exerciseObjectAllocations(allocator: std.mem.Allocator) !void {
     const upvalue = try heap.createUpvalue(&local);
     closure.setUpvalue(0, upvalue);
     const native = try heap.createNative(0, testNative);
+    const className = try heap.copyString("Class");
+    const class = try heap.createClass(className);
+    const instance = try heap.createInstance(class);
+    const fieldName = try heap.copyString("field");
+    try instance.fields.put(fieldName, .{ .number = 42 });
 
-    try std.testing.expect(heap.objects == &native.obj);
+    try std.testing.expect(heap.objects == &fieldName.obj);
+    try std.testing.expect(fieldName.obj.next == &instance.obj);
+    try std.testing.expect(instance.obj.next == &class.obj);
+    try std.testing.expect(class.obj.next == &className.obj);
+    try std.testing.expect(className.obj.next == &native.obj);
     try std.testing.expect(native.obj.next == &upvalue.obj);
     try std.testing.expect(upvalue.obj.next == &closure.obj);
     try std.testing.expect(closure.obj.next == &function.obj);
     try std.testing.expect(function.obj.next == &name.obj);
     try std.testing.expect(closure.upvalues[0].location == &local);
+    try std.testing.expectEqual(@as(f64, 42), instance.fields.get(fieldName).?.number);
+}
+
+test "instance keeps its class and fields reachable" {
+    var heap = try Heap.init(std.testing.allocator);
+    defer heap.deinit();
+
+    const className = try heap.copyString("Bag");
+    const class = try heap.createClass(className);
+    const instance = try heap.createInstance(class);
+    const fieldName = try heap.copyString("contents");
+    const fieldValue = try heap.copyString("value");
+    try instance.fields.put(fieldName, .{ .string = fieldValue });
+
+    try heap.markObj(&instance.obj);
+    try heap.traceReferences();
+
+    try std.testing.expect(class.obj.marked);
+    try std.testing.expect(className.obj.marked);
+    try std.testing.expect(fieldName.obj.marked);
+    try std.testing.expect(fieldValue.obj.marked);
 }
 
 fn testNative(_: *@import("vm.zig").VM, _: usize, _: []const Value) !Value {

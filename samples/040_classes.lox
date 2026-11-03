@@ -1,0 +1,14 @@
+class Pie {}
+class Cookie {}
+
+var cookie = Cookie();
+var pie = Pie();
+
+cookie.name = "Chocolat chip";
+pie.name = "Apple pie";
+
+print cookie;
+print cookie.name;
+print pie;
+print pie.name;
+

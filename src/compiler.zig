@@ -22,7 +22,7 @@ const CompilerError = error{ ParseError, TooManyUpvalues };
 const Precedence = enum { NONE, ASSIGNMENT, TERNARY, OR, AND, EQUALITY, COMPARISON, TERM, FACTOR, UNARY, CALL, PRIMARY };
 
 const PrefixParseFn = *const fn (self: *Compiler, canAssign: bool) (ChunkErrors || std.mem.Allocator.Error)!void;
-const InfixParseFn = *const fn (self: *Compiler) (ChunkErrors || std.mem.Allocator.Error)!void;
+const InfixParseFn = *const fn (self: *Compiler, canAssign: bool) (ChunkErrors || std.mem.Allocator.Error)!void;
 
 const ParseRule = struct {
     prefix: ?PrefixParseFn,
@@ -167,7 +167,7 @@ pub const Compiler = struct {
         compiler.rules.set(TokenType.TOKEN_LEFT_BRACKET, ParseRule{ .prefix = array, .infix = null, .precedence = Precedence.NONE });
         compiler.rules.set(TokenType.TOKEN_RIGHT_BRACKET, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
         compiler.rules.set(TokenType.TOKEN_COMMA, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
-        compiler.rules.set(TokenType.TOKEN_DOT, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
+        compiler.rules.set(TokenType.TOKEN_DOT, ParseRule{ .prefix = null, .infix = dot, .precedence = Precedence.CALL });
         compiler.rules.set(TokenType.TOKEN_MINUS, ParseRule{ .prefix = unary, .infix = binary, .precedence = Precedence.TERM });
         compiler.rules.set(TokenType.TOKEN_PLUS, ParseRule{ .prefix = null, .infix = binary, .precedence = Precedence.TERM });
         compiler.rules.set(TokenType.TOKEN_SEMICOLON, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
@@ -249,13 +249,26 @@ pub const Compiler = struct {
     }
 
     fn declaration(self: *Compiler) anyerror!void {
-        if (self.match(TokenType.TOKEN_FUN)) {
+        if (self.match(TokenType.TOKEN_CLASS)) {
+            try self.classDeclaration();
+        } else if (self.match(TokenType.TOKEN_FUN)) {
             try self.funDeclaration();
         } else if (self.match(TokenType.TOKEN_VAR)) {
             try self.varDecl();
         } else {
             try self.statement();
         }
+    }
+
+    fn classDeclaration(self: *Compiler) !void {
+        self.consume(TokenType.TOKEN_IDENTIFIER, "Expect class name.");
+        const idx = try self.identifierConstant();
+        try self.declareVariable();
+        try self.emitConstantOperand(OpCode.OP_CLASS, OpCode.OP_CLASS_LONG, idx);
+        try self.defineVariable(idx);
+
+        self.consume(TokenType.TOKEN_LEFT_BRACE, "Expect '{' before class body.");
+        self.consume(TokenType.TOKEN_RIGHT_BRACE, "Expect '}' after class body.");
     }
 
     fn funDeclaration(self: *Compiler) !void {
@@ -652,7 +665,7 @@ pub const Compiler = struct {
             self.advance();
             const infixRule = self.rules.get(self.previous.type).infix;
             self.traceParse(.infix, self.previous, self.rules.get(self.previous.type).precedence);
-            try infixRule.?(self);
+            try infixRule.?(self, canAssign);
         }
 
         if (canAssign and self.match(TokenType.TOKEN_EQUAL)) {
@@ -779,7 +792,7 @@ pub const Compiler = struct {
         self.consume(TokenType.TOKEN_RIGHT_PAREN, "Expect ')' after expression.");
     }
 
-    fn call(self: *Compiler) !void {
+    fn call(self: *Compiler, _: bool) !void {
         const argCount = try self.argumentList();
         try self.emitOpWithByteOperand(OpCode.OP_CALL, argCount);
     }
@@ -801,7 +814,19 @@ pub const Compiler = struct {
         return argCount;
     }
 
-    fn binary(self: *Compiler) !void {
+    fn dot(self: *Compiler, canAssign: bool) !void {
+        self.consume(TokenType.TOKEN_IDENTIFIER, "Expect property name after '.'.");
+        const name = try self.identifierConstant();
+
+        if (canAssign and self.match(TokenType.TOKEN_EQUAL)) {
+            try self.expression();
+            try self.emitConstantOperand(OpCode.OP_SET_PROPERTY, OpCode.OP_SET_PROPERTY_LONG, name);
+        } else {
+            try self.emitConstantOperand(OpCode.OP_GET_PROPERTY, OpCode.OP_GET_PROPERTY_LONG, name);
+        }
+    }
+
+    fn binary(self: *Compiler, _: bool) !void {
         const operatorType = self.previous.type;
         const rule = self.rules.get(operatorType);
 
@@ -824,7 +849,7 @@ pub const Compiler = struct {
         };
     }
 
-    fn ternary(self: *Compiler) !void {
+    fn ternary(self: *Compiler, _: bool) !void {
         // if
         const thenJump = try self.emitJump(OpCode.OP_JUMP_IF_FALSE);
         try self.emitOp(OpCode.OP_POP);
@@ -844,7 +869,7 @@ pub const Compiler = struct {
         try self.patchJump(elseJump);
     }
 
-    fn and_(self: *Compiler) !void {
+    fn and_(self: *Compiler, _: bool) !void {
         const endJump = try self.emitJump(OpCode.OP_JUMP_IF_FALSE);
 
         try self.emitOp(OpCode.OP_POP);
@@ -853,7 +878,7 @@ pub const Compiler = struct {
         try self.patchJump(endJump);
     }
 
-    fn or_(self: *Compiler) !void {
+    fn or_(self: *Compiler, _: bool) !void {
         const elseJump = try self.emitJump(OpCode.OP_JUMP_IF_FALSE);
         const endJump = try self.emitJump(OpCode.OP_JUMP);
 

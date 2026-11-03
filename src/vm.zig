@@ -39,6 +39,8 @@ const RuntimeFault = union(enum) {
     },
     stack_overflow,
     not_callable,
+    not_assignable,
+    unknown_property: struct { name: []const u8 },
     illegal_opcode: u8,
 
     pub fn format(self: RuntimeFault, writer: *std.Io.Writer) std.Io.Writer.Error!void {
@@ -54,6 +56,8 @@ const RuntimeFault = union(enum) {
             .stack_overflow => try writer.writeAll("Stack overflow"),
             .not_callable => try writer.writeAll("Can only call functions."),
             .illegal_opcode => |opcode| try writer.print("Unknown opcode 0x{x:0>2}.", .{opcode}),
+            .not_assignable => try writer.writeAll("Can only assign to class instances."),
+            .unknown_property => |e| try writer.print("Unknown property '{s}'", .{e.name}),
         }
     }
 };
@@ -394,6 +398,46 @@ pub const VM = struct {
                     code = frame.closure.function.chunk.code.items.ptr;
                     ip = frame.ip;
                 },
+                OpCode.OP_CLASS, OpCode.OP_CLASS_LONG => {
+                    const name = if (instruction == .OP_CLASS)
+                        self.readConstant(&ip, constants)
+                    else
+                        self.readLongConstant(&ip, constants);
+
+                    try self.stack.append(.{ .class = try self.heap.createClass(name.string) });
+                },
+                OpCode.OP_GET_PROPERTY, OpCode.OP_GET_PROPERTY_LONG => {
+                    const name = if (instruction == .OP_GET_PROPERTY)
+                        self.readConstant(&ip, constants)
+                    else
+                        self.readLongConstant(&ip, constants);
+
+                    const instance = self.stack.pop().?;
+                    if (value.isInstance(instance)) {
+                        if (instance.instance.fields.get(name.string)) |v| {
+                            try self.stack.append(v);
+                        } else {
+                            return .{ .unknown_property = .{ .name = name.string.chars } };
+                        }
+                    } else {
+                        return .not_assignable;
+                    }
+                },
+                OpCode.OP_SET_PROPERTY, OpCode.OP_SET_PROPERTY_LONG => {
+                    const name = if (instruction == .OP_SET_PROPERTY)
+                        self.readConstant(&ip, constants)
+                    else
+                        self.readLongConstant(&ip, constants);
+
+                    const v = self.stack.pop().?;
+                    const instance = self.stack.pop().?;
+                    if (value.isInstance(instance)) {
+                        try instance.instance.fields.put(name.string, v);
+                        try self.stack.append(v);
+                    } else {
+                        return .not_assignable;
+                    }
+                },
                 OpCode.OP_DEFINE_GLOBAL, OpCode.OP_DEFINE_GLOBAL_LONG => {
                     const identifier = if (instruction == .OP_DEFINE_GLOBAL)
                         self.readConstant(&ip, constants)
@@ -604,6 +648,8 @@ pub const VM = struct {
             .function => |f| f == b.function,
             .native => |n| n == b.native,
             .closure => |c| c == b.closure,
+            .class => |class| class == b.class,
+            .instance => |instance| instance == b.instance,
             .array => {
                 if (a.array.values.items.len != b.array.values.items.len) return false;
                 for (0..a.array.values.items.len) |i| {
@@ -616,6 +662,10 @@ pub const VM = struct {
 
     inline fn callValue(self: *VM, callee: Value, argCount: u8) !?RuntimeFault {
         switch (callee) {
+            .class => |class| {
+                try self.stack.append(.{ .instance = try self.heap.createInstance(class) });
+                return null;
+            },
             .closure => |closure| {
                 if (argCount != closure.function.arity) {
                     return .{ .expected_arguments = .{
@@ -753,6 +803,8 @@ pub fn strNative(vm: *VM, argCount: usize, args: []const Value) !Value {
         .native => try vm.heap.copyString("native"),
         .closure => try vm.heap.copyString("function"),
         .array => try vm.heap.copyString("array"),
+        .class => try vm.heap.copyString("class"),
+        .instance => try vm.heap.copyString("instance"),
     };
 
     return .{ .string = str };
@@ -930,7 +982,7 @@ inline fn isTruthy(v: Value) bool {
         .bool => v.bool,
         .number => false,
         .nil => false,
-        .string, .function, .native, .closure => false,
+        .string, .function, .native, .closure, .class, .instance => false,
         .array => v.array.values.items.len > 0,
     };
 }
@@ -940,7 +992,7 @@ inline fn isFalsey(v: Value) bool {
         .bool => !v.bool,
         .number => false,
         .nil => true,
-        .string, .function, .native, .closure => true,
+        .string, .function, .native, .closure, .class, .instance => true,
         .array => v.array.values.items.len == 0,
     };
 }

@@ -16,11 +16,24 @@ pub const Value = union(enum) {
     native: *ObjNative,
     closure: *ObjClosure,
     array: *ObjArray,
+    class: *ObjClass,
+    instance: *ObjInstance,
 };
 
 pub const ObjArray = struct {
     obj: Obj = .{ .kind = .array },
     values: std.ArrayList(Value) = .empty,
+};
+
+pub const ObjClass = struct {
+    obj: Obj = .{ .kind = .class },
+    name: *ObjStr,
+};
+
+pub const ObjInstance = struct {
+    obj: Obj = .{ .kind = .instance },
+    class: *ObjClass,
+    fields: std.AutoHashMap(*ObjStr, Value),
 };
 
 pub const ObjClosure = struct {
@@ -75,7 +88,7 @@ pub const ObjNative = struct {
 pub const Obj = struct {
     next: ?*Obj = null,
     marked: bool = false,
-    kind: enum { str, function, native, closure, upvalue, array },
+    kind: enum { str, function, native, closure, upvalue, array, class, instance },
 
     pub fn mark(self: *Obj) void {
         self.marked = true;
@@ -106,6 +119,14 @@ pub const Obj = struct {
             .array => {
                 const a: *ObjArray = @fieldParentPtr("obj", self);
                 try writer.print("{f}", .{Formatter{ .value = Value{ .array = a } }});
+            },
+            .class => {
+                const c: *ObjClass = @fieldParentPtr("obj", self);
+                try writer.print("{f}", .{Formatter{ .value = Value{ .class = c } }});
+            },
+            .instance => {
+                const i: *ObjInstance = @fieldParentPtr("obj", self);
+                try writer.print("{f}", .{Formatter{ .value = Value{ .instance = i } }});
             },
         }
     }
@@ -143,6 +164,15 @@ pub const Obj = struct {
                 a.values.deinit(allocator);
                 allocator.destroy(a);
             },
+            .class => {
+                const c: *ObjClass = @fieldParentPtr("obj", self);
+                allocator.destroy(c);
+            },
+            .instance => {
+                const i: *ObjInstance = @fieldParentPtr("obj", self);
+                i.fields.deinit();
+                allocator.destroy(i);
+            },
         }
     }
 };
@@ -178,6 +208,14 @@ pub inline fn isArray(v: Value) bool {
     };
 }
 
+pub inline fn isClass(v: Value) bool {
+    return v == .class;
+}
+
+pub inline fn isInstance(v: Value) bool {
+    return v == .instance;
+}
+
 pub inline fn isBool(v: Value) bool {
     return switch (v) {
         .bool => true,
@@ -206,6 +244,14 @@ pub inline fn asNative(v: Value) *ObjNative {
 
 pub inline fn asClosure(v: Value) *ObjClosure {
     return v.closure;
+}
+
+pub inline fn asClass(v: Value) *ObjClass {
+    return v.class;
+}
+
+pub inline fn asInstance(v: Value) *ObjInstance {
+    return v.instance;
 }
 
 pub inline fn asStr(v: Value) []const u8 {
@@ -276,6 +322,8 @@ pub const Formatter = struct {
 
                 try writer.writeAll("]");
             },
+            .class => |class| try writer.print("<class {s}>", .{class.name.chars}),
+            .instance => |instance| try writer.print("<{s} instance>", .{instance.class.name.chars}),
         }
     }
 };
@@ -294,6 +342,8 @@ pub fn write(v: Value, writer: *std.Io.Writer) std.Io.Writer.Error!void {
         .native => try writer.writeAll("<native_fn>"),
         .closure => |c| try writer.writeAll(c.function.name.chars),
         .array => try writer.print("{f}", .{Formatter{ .value = v }}),
+        .class => |class| try writer.writeAll(class.name.chars),
+        .instance => |instance| try writer.print("{s} instance", .{instance.class.name.chars}),
     }
 }
 
