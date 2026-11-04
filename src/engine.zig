@@ -114,23 +114,19 @@ test "global operand widths at constant indices 255 and 256" {
 
         const function = try compiler.compile();
         const chunk = &function.chunk;
-        const expected = if (index == 255)
-            [_]chunk_mod.OpCode{ .OP_DEFINE_GLOBAL, .OP_SET_GLOBAL, .OP_GET_GLOBAL }
-        else
-            [_]chunk_mod.OpCode{ .OP_DEFINE_GLOBAL_LONG, .OP_SET_GLOBAL_LONG, .OP_GET_GLOBAL_LONG };
+        // Both widths use the same narrow opcodes; index 256 just gets an OP_EXTRA_ARG prefix.
+        const expected = [_]chunk_mod.OpCode{ .OP_DEFINE_GLOBAL, .OP_SET_GLOBAL, .OP_GET_GLOBAL };
         var seen: usize = 0;
         var offset: usize = 0;
         while (offset < chunk.code.items.len) : (offset += chunk.instructionLength(offset)) {
-            const op: chunk_mod.OpCode = @enumFromInt(chunk.code.items[offset]);
-            switch (op) {
-                .OP_DEFINE_GLOBAL, .OP_DEFINE_GLOBAL_LONG, .OP_GET_GLOBAL, .OP_GET_GLOBAL_LONG, .OP_SET_GLOBAL, .OP_SET_GLOBAL_LONG => {
+            const d = chunk.decode(offset);
+            switch (d.op) {
+                .OP_DEFINE_GLOBAL, .OP_GET_GLOBAL, .OP_SET_GLOBAL => {
                     try std.testing.expect(seen < expected.len);
-                    try std.testing.expectEqual(expected[seen], op);
-                    const decoded = if (index == 255)
-                        chunk.code.items[offset + 1]
-                    else
-                        std.mem.readInt(u24, chunk.code.items[offset + 1 ..][0..3], .big);
-                    try std.testing.expectEqual(index, decoded);
+                    try std.testing.expectEqual(expected[seen], d.op);
+                    try std.testing.expectEqual(index, d.operand);
+                    const prefixBytes: usize = if (index == 255) 0 else 2;
+                    try std.testing.expectEqual(prefixBytes, d.op_offset - offset);
                     seen += 1;
                 },
                 else => {},
@@ -312,6 +308,11 @@ test "036 callable equality uses identity" {
         const result = vm.getGlobal(name) orelse return error.MissingEqualityResult;
         try std.testing.expectEqual(true, result.bool);
     }
+}
+
+test "046 wide local slots" {
+    const result = try executeTestFile(std.testing.allocator, "046_wide_locals.lox");
+    try std.testing.expectEqual(InterpretResult.OK, result);
 }
 
 test "038 garbage collection stress" {

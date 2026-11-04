@@ -4,22 +4,17 @@ const Value = value_mod.Value;
 const ObjFunction = value_mod.ObjFunction;
 
 pub const OpCode = enum(u8) {
+    OP_EXTRA_ARG,
     OP_METHOD,
-    OP_METHOD_LONG,
     OP_GET_PROPERTY,
-    OP_GET_PROPERTY_LONG,
     OP_SET_PROPERTY,
-    OP_SET_PROPERTY_LONG,
     OP_CLASS,
-    OP_CLASS_LONG,
     OP_ARRAY,
-    OP_ARRAY_LONG,
     OP_RETURN,
     OP_TRUE,
     OP_FALSE,
     OP_NIL,
     OP_CONSTANT,
-    OP_CONSTANT_LONG,
     OP_NEGATE,
     OP_NOT,
     OP_ADD,
@@ -34,18 +29,12 @@ pub const OpCode = enum(u8) {
     OP_PRINT,
     OP_CALL,
     OP_INVOKE,
-    OP_INVOKE_LONG,
     OP_CLOSURE,
-    OP_CLOSURE_LONG,
     OP_POP,
     OP_POPN,
-    OP_POPN_LONG,
     OP_DEFINE_GLOBAL,
-    OP_DEFINE_GLOBAL_LONG,
     OP_GET_GLOBAL,
-    OP_GET_GLOBAL_LONG,
     OP_SET_GLOBAL,
-    OP_SET_GLOBAL_LONG,
     OP_GET_LOCAL,
     OP_SET_LOCAL,
     OP_GET_UPVALUE,
@@ -67,78 +56,71 @@ pub const Chunk = struct {
         show_opcode_prefix: bool,
 
         pub fn format(self: InstructionFormatter, writer: *std.Io.Writer) std.Io.Writer.Error!void {
-            const byte = self.chunk.code.items[self.offset];
-            const op = std.enums.fromInt(OpCode, byte) orelse OpCode.ILLEGAL;
-            const tag_name = @tagName(op);
+            // `decode` folds any OP_EXTRA_ARG prefixes into the operand, so a wide
+            // instruction is printed as a single line.
+            const d = self.chunk.decode(self.offset);
+            const code = self.chunk.code.items;
+            const data = self.chunk.data.items;
+            const tag_name = @tagName(d.op);
             const name = if (!self.show_opcode_prefix and std.mem.startsWith(u8, tag_name, "OP_"))
                 tag_name["OP_".len..]
             else
                 tag_name;
 
-            switch (op) {
-                .OP_POPN, .OP_CALL, .OP_ARRAY => {
-                    const n = self.chunk.code.items[self.offset + 1];
-                    try writer.print("{s} [{d}]", .{ name, n });
-                },
-                .OP_POPN_LONG, .OP_ARRAY_LONG => {
-                    const bytes = self.chunk.code.items[self.offset + 1 ..][0..3];
-                    const n = std.mem.readInt(u24, bytes, .big);
-                    try writer.print("{s} [{d}]", .{ name, n });
+            switch (d.op) {
+                .OP_POPN, .OP_CALL, .OP_ARRAY, .OP_GET_UPVALUE, .OP_SET_UPVALUE, .OP_GET_LOCAL, .OP_SET_LOCAL => {
+                    try writer.print("{s} [{d}]", .{ name, d.operand });
                 },
                 .OP_CONSTANT, .OP_DEFINE_GLOBAL, .OP_GET_GLOBAL, .OP_SET_GLOBAL, .OP_CLASS, .OP_GET_PROPERTY, .OP_SET_PROPERTY, .OP_METHOD => {
-                    const index = self.chunk.code.items[self.offset + 1];
-                    try writer.print("{s} [{d}] {f}", .{ name, index, value_mod.format(self.chunk.data.items[index]) });
+                    try writer.print("{s} [{d}] {f}", .{ name, d.operand, value_mod.format(data[d.operand]) });
                 },
-                .OP_CONSTANT_LONG, .OP_DEFINE_GLOBAL_LONG, .OP_GET_GLOBAL_LONG, .OP_SET_GLOBAL_LONG, .OP_CLASS_LONG, .OP_GET_PROPERTY_LONG, .OP_SET_PROPERTY_LONG, .OP_METHOD_LONG => {
-                    const bytes = self.chunk.code.items[self.offset + 1 ..][0..3];
-                    const index = std.mem.readInt(u24, bytes, .big);
-                    try writer.print("{s} [{d}] {f}", .{ name, index, value_mod.format(self.chunk.data.items[index]) });
+                .OP_INVOKE => {
+                    const argCount = code[d.op_offset + 2];
+                    try writer.print("{s} [{d}] {f} (args = {d})", .{ name, d.operand, value_mod.format(data[d.operand]), argCount });
                 },
-                .OP_GET_UPVALUE, .OP_SET_UPVALUE, .OP_GET_LOCAL, .OP_SET_LOCAL => {
-                    const bytes = self.chunk.code.items[self.offset + 1 ..][0..3];
-                    const index = std.mem.readInt(u24, bytes, .big);
-                    try writer.print("{s} [{d}]", .{ name, index });
-                },
-                .OP_INVOKE, .OP_INVOKE_LONG => {
-                    const index = if (op == .OP_INVOKE)
-                        self.chunk.code.items[self.offset + 1]
-                    else
-                        std.mem.readInt(u24, self.chunk.code.items[self.offset + 1 ..][0..3], .big);
-                    const argCount = if (op == .OP_INVOKE)
-                        self.chunk.code.items[self.offset + 2]
-                    else
-                        self.chunk.code.items[self.offset + 4];
-                    const methodName = self.chunk.data.items[index];
-                    try writer.print("{s} [{d}] {f} (args = {d})", .{ name, index, value_mod.format(methodName), argCount });
-                },
-                .OP_CLOSURE, .OP_CLOSURE_LONG => {
-                    const operandLength: usize = if (op == .OP_CLOSURE) 1 else 3;
-                    const index = if (op == .OP_CLOSURE)
-                        self.chunk.code.items[self.offset + 1]
-                    else
-                        std.mem.readInt(u24, self.chunk.code.items[self.offset + 1 ..][0..3], .big);
-                    const upvalueCount = value_mod.asFunction(self.chunk.data.items[index]).upvalueCount;
-                    try writer.print("{s} [{d}]", .{ name, index });
+                .OP_CLOSURE => {
+                    const upvalueCount = value_mod.asFunction(data[d.operand]).upvalueCount;
+                    try writer.print("{s} [{d}]", .{ name, d.operand });
+                    // Upvalue descriptors start right after the opcode's operand byte.
+                    const descriptors = d.op_offset + 2;
                     for (0..upvalueCount) |i| {
-                        const isLocal = self.chunk.code.items[operandLength + self.offset + i * 4 + 1];
-                        const bytes = self.chunk.code.items[operandLength + self.offset + i * 4 + 2 ..][0..3];
-                        const idx = std.mem.readInt(u24, bytes, .big);
+                        const isLocal = code[descriptors + i * 4];
+                        const idx = std.mem.readInt(u24, code[descriptors + i * 4 + 1 ..][0..3], .big);
                         try writer.print(" ~ upvalue {s} [{d}]", .{ if (isLocal == 1) "<local>" else "", idx });
                     }
                 },
                 .OP_JUMP_IF_FALSE, .OP_JUMP, .OP_LOOP => {
-                    const high = self.chunk.code.items[self.offset + 1];
-                    const low = self.chunk.code.items[self.offset + 2];
+                    const high = code[d.op_offset + 1];
+                    const low = code[d.op_offset + 2];
                     const distance = (@as(u16, high) << 8) | low;
-                    const next = self.offset + 3;
-                    const target = if (op == .OP_LOOP) next - distance else next + distance;
+                    const next = d.op_offset + 3;
+                    const target = if (d.op == .OP_LOOP) next - distance else next + distance;
                     try writer.print("{s} -> {d:0>4}", .{ name, target });
                 },
-                .ILLEGAL => try writer.print("ILLEGAL 0x{x:0>2}", .{byte}),
+                .ILLEGAL => try writer.print("ILLEGAL 0x{x:0>2}", .{code[d.op_offset]}),
+                // `decode` always skips past prefixes, so OP_EXTRA_ARG never shows up here.
                 else => try writer.writeAll(name),
             }
         }
     };
+
+    /// An instruction with its OP_EXTRA_ARG prefixes folded into the operand.
+    pub const Decoded = struct {
+        op: OpCode,
+        /// Prefix bytes folded in; 0 for operand-less ops.
+        operand: u32,
+        /// Where the real opcode byte sits (after any prefixes).
+        op_offset: usize,
+    };
+
+    /// Does `op` take a one-byte operand that OP_EXTRA_ARG prefixes can widen?
+    /// Jumps are not listed: they have a fixed 2-byte operand.
+    pub fn hasOperand(op: OpCode) bool {
+        return switch (op) {
+            .OP_CONSTANT, .OP_DEFINE_GLOBAL, .OP_GET_GLOBAL, .OP_SET_GLOBAL, .OP_CLASS, .OP_METHOD, .OP_GET_PROPERTY, .OP_SET_PROPERTY, .OP_INVOKE, .OP_CLOSURE, .OP_POPN, .OP_ARRAY, .OP_CALL, .OP_GET_LOCAL, .OP_SET_LOCAL, .OP_GET_UPVALUE, .OP_SET_UPVALUE => true,
+            else => false,
+        };
+    }
 
     allocator: std.mem.Allocator,
     code: std.ArrayList(u8) = undefined,
@@ -191,25 +173,25 @@ pub const Chunk = struct {
         return line;
     }
 
-    pub fn addValue(self: *Chunk, v: Value) (std.mem.Allocator.Error || ChunkErrors)!u24 {
+    pub fn addValue(self: *Chunk, v: Value) (std.mem.Allocator.Error || ChunkErrors)!u32 {
         try self.data.append(self.allocator, v);
 
         const index = self.data.items.len - 1;
-        // We only have 2^24 data slots available in our VM.
-        if (index > std.math.maxInt(u24)) {
+        // We only have 2^32 data slots available in our VM (three OP_EXTRA_ARG prefixes).
+        if (index > std.math.maxInt(u32)) {
             return ChunkErrors.OutOfConstantDataSlots;
         }
 
         return @intCast(index);
     }
 
-    pub fn findValue(self: *Chunk, v: []const u8) ?u24 {
+    pub fn findValue(self: *Chunk, v: []const u8) ?u32 {
         for (self.data.items, 0..) |value, i| {
             if (value_mod.isString(value)) {
                 const chars = value.string.chars;
                 if (chars.ptr == v.ptr and chars.len == v.len) {
-                    // Impossible to fina a dataslot that doesn't fit a u24, as it cannot be stored.
-                    return std.math.cast(u24, i) orelse unreachable;
+                    // Impossible to find a dataslot that doesn't fit a u32, as it cannot be stored.
+                    return std.math.cast(u32, i) orelse unreachable;
                 }
             }
         }
@@ -246,24 +228,32 @@ pub const Chunk = struct {
         };
     }
 
+    /// Decode the instruction at `offset`, folding in any OP_EXTRA_ARG prefixes.
+    /// `offset` must be an instruction start (first prefix, or the opcode itself).
+    /// We can't scan backwards from an opcode to find its prefixes, because an
+    /// operand byte may have the same value as OP_EXTRA_ARG.
+    pub fn decode(self: *const Chunk, offset: usize) Decoded {
+        var extra: u32 = 0;
+        var i = offset;
+        while (self.code.items[i] == @intFromEnum(OpCode.OP_EXTRA_ARG)) : (i += 2) {
+            extra = (extra << 8) | self.code.items[i + 1];
+        }
+        const op = std.enums.fromInt(OpCode, self.code.items[i]) orelse .ILLEGAL;
+        const operand = if (hasOperand(op)) (extra << 8) | self.code.items[i + 1] else 0;
+        return .{ .op = op, .operand = operand, .op_offset = i };
+    }
+
+    /// Length in bytes of the instruction at `offset`, including its prefixes.
     pub fn instructionLength(self: *const Chunk, offset: usize) usize {
-        const op = std.enums.fromInt(OpCode, self.code.items[offset]) orelse return 1;
-        return switch (op) {
-            .OP_CONSTANT, .OP_CALL, .OP_POPN, .OP_DEFINE_GLOBAL, .OP_GET_GLOBAL, .OP_SET_GLOBAL, .OP_ARRAY, .OP_CLASS, .OP_GET_PROPERTY, .OP_SET_PROPERTY, .OP_METHOD => 2,
-            .OP_ARRAY_LONG, .OP_POPN_LONG, .OP_CONSTANT_LONG, .OP_DEFINE_GLOBAL_LONG, .OP_GET_LOCAL, .OP_SET_LOCAL, .OP_GET_GLOBAL_LONG, .OP_SET_GLOBAL_LONG, .OP_GET_UPVALUE, .OP_SET_UPVALUE, .OP_CLASS_LONG, .OP_SET_PROPERTY_LONG, .OP_GET_PROPERTY_LONG, .OP_METHOD_LONG => 4,
+        const d = self.decode(offset);
+        const prefix = d.op_offset - offset;
+        const base: usize = switch (d.op) {
             .OP_JUMP_IF_FALSE, .OP_JUMP, .OP_LOOP, .OP_INVOKE => 3,
-            .OP_INVOKE_LONG => 5,
-            .OP_CLOSURE, .OP_CLOSURE_LONG => {
-                const operandLength: usize = if (op == .OP_CLOSURE) 1 else 3;
-                const idx = if (op == .OP_CLOSURE)
-                    self.code.items[offset + 1]
-                else
-                    std.mem.readInt(u24, self.code.items[offset + 1 ..][0..3], .big);
-                const upvalueCount = value_mod.asFunction(self.data.items[idx]).upvalueCount;
-                return 1 + operandLength + upvalueCount * 4;
-            },
-            else => 1,
+            // Each upvalue descriptor is `isLocal: u8` + `index: u24`.
+            .OP_CLOSURE => 2 + value_mod.asFunction(self.data.items[d.operand]).upvalueCount * 4,
+            else => if (hasOperand(d.op)) 2 else 1,
         };
+        return prefix + base;
     }
 };
 
@@ -273,13 +263,48 @@ test "instruction length includes POPN operands" {
 
     try chunk.writeChunk(@intFromEnum(OpCode.OP_POPN), 1);
     try chunk.writeChunk(1, 1);
-    try chunk.writeChunk(@intFromEnum(OpCode.OP_POPN_LONG), 1);
-    try chunk.writeChunk(0, 1);
+    try chunk.writeChunk(@intFromEnum(OpCode.OP_EXTRA_ARG), 1);
     try chunk.writeChunk(1, 1);
+    try chunk.writeChunk(@intFromEnum(OpCode.OP_POPN), 1);
     try chunk.writeChunk(0, 1);
 
     try std.testing.expectEqual(@as(usize, 2), chunk.instructionLength(0));
     try std.testing.expectEqual(@as(usize, 4), chunk.instructionLength(2));
+}
+
+test "decode folds OP_EXTRA_ARG prefixes into the operand" {
+    const cases = [_]struct { bytes: []const u8, operand: u32 }{
+        .{ .bytes = &.{ @intFromEnum(OpCode.OP_CONSTANT), 0x07 }, .operand = 7 },
+        .{ .bytes = &.{ @intFromEnum(OpCode.OP_EXTRA_ARG), 0x01, @intFromEnum(OpCode.OP_CONSTANT), 0x2C }, .operand = 300 },
+        .{ .bytes = &.{ @intFromEnum(OpCode.OP_EXTRA_ARG), 0x01, @intFromEnum(OpCode.OP_EXTRA_ARG), 0x11, @intFromEnum(OpCode.OP_CONSTANT), 0x70 }, .operand = 70_000 },
+        // A middle prefix byte of 0 (and an operand byte equal to OP_EXTRA_ARG's value).
+        .{ .bytes = &.{ @intFromEnum(OpCode.OP_EXTRA_ARG), 0x01, @intFromEnum(OpCode.OP_EXTRA_ARG), 0x00, @intFromEnum(OpCode.OP_EXTRA_ARG), 0x00, @intFromEnum(OpCode.OP_CONSTANT), @intFromEnum(OpCode.OP_EXTRA_ARG) }, .operand = 0x01_00_00_00 },
+    };
+
+    for (cases) |case| {
+        var chunk = Chunk.init(std.testing.allocator);
+        defer chunk.deinit();
+        for (case.bytes) |b| try chunk.writeChunk(b, 1);
+
+        const d = chunk.decode(0);
+        try std.testing.expectEqual(OpCode.OP_CONSTANT, d.op);
+        try std.testing.expectEqual(case.operand, d.operand);
+        try std.testing.expectEqual(case.bytes.len - 2, d.op_offset);
+        try std.testing.expectEqual(case.bytes.len, chunk.instructionLength(0));
+    }
+}
+
+test "disassembler folds a wide instruction into one line" {
+    var chunk = Chunk.init(std.testing.allocator);
+    defer chunk.deinit();
+
+    for ([_]u8{ @intFromEnum(OpCode.OP_EXTRA_ARG), 0x01, @intFromEnum(OpCode.OP_EXTRA_ARG), 0x11, @intFromEnum(OpCode.OP_POPN), 0x70 }) |b| {
+        try chunk.writeChunk(b, 1);
+    }
+
+    var buffer: [64]u8 = undefined;
+    const line = try std.fmt.bufPrint(&buffer, "{f}", .{chunk.formatInstruction(0, false)});
+    try std.testing.expectEqualStrings("POPN [70000]", line);
 }
 
 test "compressed line table resolves instruction offsets" {

@@ -42,7 +42,7 @@ pub const FunctionType = enum { FUNCTION, SCRIPT, METHOD, INITIALIZER };
 
 const EmitTrace = struct {
     op: OpCode,
-    operand: ?u24 = null,
+    operand: ?u32 = null,
     line: u32,
 };
 
@@ -271,7 +271,7 @@ pub const Compiler = struct {
         const className = self.previous;
         const idx = try self.identifierConstant();
         try self.declareVariable();
-        try self.emitConstantOperand(OpCode.OP_CLASS, OpCode.OP_CLASS_LONG, idx);
+        try self.emitOpWithOperand(OpCode.OP_CLASS, idx);
         try self.defineVariable(idx);
 
         try self.namedVariable(false, className.lexeme);
@@ -294,7 +294,7 @@ pub const Compiler = struct {
         const fType = if (std.mem.eql(u8, self.previous.lexeme, "init")) FunctionType.INITIALIZER else FunctionType.METHOD;
         const name = try self.identifierConstant();
         try self.function(fType);
-        try self.emitConstantOperand(OpCode.OP_METHOD, OpCode.OP_METHOD_LONG, name);
+        try self.emitOpWithOperand(OpCode.OP_METHOD, name);
     }
 
     fn funDeclaration(self: *Compiler) !void {
@@ -307,7 +307,7 @@ pub const Compiler = struct {
         var inner = try Compiler.init(self.io, self.allocator, self.scanner, self.vm, self, fType);
         try inner._function();
         const functionObject = inner.endCompiler();
-        try self.emitConstantOperand(OpCode.OP_CLOSURE, OpCode.OP_CLOSURE_LONG, try self.makeConstant(.{ .function = functionObject }));
+        try self.emitOpWithOperand(OpCode.OP_CLOSURE, try self.makeConstant(.{ .function = functionObject }));
         // Each captured variable is encoded after OP_CLOSURE as an isLocal byte and a u24 index.
         for (0..functionObject.upvalueCount) |i| {
             try self.emitByte(if (inner.upvalues[i].isLocal) 1 else 0);
@@ -428,11 +428,7 @@ pub const Compiler = struct {
                 try self.emitOp(if (local.isCaptured) OpCode.OP_CLOSE_UPVALUE else OpCode.OP_POP);
             }
         } else if (n > 0) {
-            if (n < UINT8_COUNT) {
-                try self.emitOpWithByteOperand(OpCode.OP_POPN, @intCast(n));
-            } else {
-                try self.emitOpWithMediumOperand(OpCode.OP_POPN_LONG, @intCast(n));
-            }
+            try self.emitOpWithOperand(OpCode.OP_POPN, @intCast(n));
             self.locals.shrinkRetainingCapacity(scopeStart);
         }
     }
@@ -572,7 +568,7 @@ pub const Compiler = struct {
         const noMatchJump = try self.emitJump(OpCode.OP_JUMP_IF_FALSE);
         // We remove both the equals result and the selector.
         // This is safe since we don't need the selector anymore because only 1 case can match.
-        try self.emitOpWithByteOperand(OpCode.OP_POPN, 2); // [...]
+        try self.emitOpWithOperand(OpCode.OP_POPN, 2); // [...]
         try self.switchArmBody();
         const exitJump = try self.emitJump(OpCode.OP_JUMP);
 
@@ -609,7 +605,7 @@ pub const Compiler = struct {
         try self.defineVariable(global);
     }
 
-    fn parseVariable(self: *Compiler, errorMessage: []const u8) !u24 {
+    fn parseVariable(self: *Compiler, errorMessage: []const u8) !u32 {
         self.consume(TokenType.TOKEN_IDENTIFIER, errorMessage);
         try self.declareVariable();
         if (self.scopeDepth > 0) {
@@ -644,7 +640,7 @@ pub const Compiler = struct {
         try self.locals.append(self.allocator, Local{ .name = name, .depth = self.scopeDepth, .isCaptured = false });
     }
 
-    fn identifierConstant(self: *Compiler) !u24 {
+    fn identifierConstant(self: *Compiler) !u32 {
         const obj = try self.vm.heap.copyString(self.previous.lexeme);
         const constant = self.currentChunk().findValue(obj.chars);
         if (constant != null) {
@@ -654,11 +650,11 @@ pub const Compiler = struct {
         return try self.makeConstant(.{ .string = obj });
     }
 
-    fn defineVariable(self: *Compiler, global: u24) !void {
+    fn defineVariable(self: *Compiler, global: u32) !void {
         if (self.scopeDepth > 0) {
             return;
         }
-        try self.emitConstantOperand(.OP_DEFINE_GLOBAL, .OP_DEFINE_GLOBAL_LONG, global);
+        try self.emitOpWithOperand(.OP_DEFINE_GLOBAL, global);
     }
 
     fn printStatement(self: *Compiler) !void {
@@ -706,7 +702,7 @@ pub const Compiler = struct {
     }
 
     fn array(self: *Compiler, _: bool) !void {
-        var len: u24 = 0;
+        var len: u32 = 0;
         if (!self.check(TokenType.TOKEN_RIGHT_BRACKET)) {
             while (true) {
                 try self.expression();
@@ -717,11 +713,7 @@ pub const Compiler = struct {
 
         self.consume(TokenType.TOKEN_RIGHT_BRACKET, "Expect ']' after list.");
 
-        if (len < 0xFF) {
-            try self.emitOpWithByteOperand(OpCode.OP_ARRAY, @intCast(len));
-        } else {
-            try self.emitOpWithMediumOperand(OpCode.OP_ARRAY_LONG, len);
-        }
+        try self.emitOpWithOperand(OpCode.OP_ARRAY, len);
     }
 
     fn number(self: *Compiler, _: bool) !void {
@@ -755,9 +747,12 @@ pub const Compiler = struct {
     fn namedVariable(self: *Compiler, canAssign: bool, name: []const u8) !void {
         var getOp: OpCode = OpCode.OP_GET_LOCAL;
         var setOp: OpCode = OpCode.OP_SET_LOCAL;
-        var arg = self.resolveLocal(name);
+        // Local slots and upvalue indices are narrower than constant indices; they widen into `arg`.
+        var arg: ?u32 = null;
 
-        if (arg == null) {
+        if (self.resolveLocal(name)) |local| {
+            arg = local;
+        } else {
             if (try self.resolveUpvalue(name)) |a| {
                 arg = a;
                 getOp = OpCode.OP_GET_UPVALUE;
@@ -774,11 +769,7 @@ pub const Compiler = struct {
             break :op setOp;
         } else getOp;
 
-        switch (op) {
-            .OP_GET_GLOBAL => try self.emitConstantOperand(op, .OP_GET_GLOBAL_LONG, arg.?),
-            .OP_SET_GLOBAL => try self.emitConstantOperand(op, .OP_SET_GLOBAL_LONG, arg.?),
-            else => try self.emitOpWithMediumOperand(op, arg.?),
-        }
+        try self.emitOpWithOperand(op, arg.?);
     }
 
     fn resolveLocal(self: *Compiler, name: []const u8) ?u24 {
@@ -834,7 +825,7 @@ pub const Compiler = struct {
 
     fn call(self: *Compiler, _: bool) !void {
         const argCount = try self.argumentList();
-        try self.emitOpWithByteOperand(OpCode.OP_CALL, argCount);
+        try self.emitOpWithOperand(OpCode.OP_CALL, argCount);
     }
 
     fn argumentList(self: *Compiler) !u8 {
@@ -860,13 +851,13 @@ pub const Compiler = struct {
 
         if (canAssign and self.match(TokenType.TOKEN_EQUAL)) {
             try self.expression();
-            try self.emitConstantOperand(OpCode.OP_SET_PROPERTY, OpCode.OP_SET_PROPERTY_LONG, name);
+            try self.emitOpWithOperand(OpCode.OP_SET_PROPERTY, name);
         } else if (self.match(TokenType.TOKEN_LEFT_PAREN)) {
             const argCount = try self.argumentList();
-            try self.emitConstantOperand(OpCode.OP_INVOKE, OpCode.OP_INVOKE_LONG, name);
+            try self.emitOpWithOperand(OpCode.OP_INVOKE, name);
             try self.emitByte(argCount);
         } else {
-            try self.emitConstantOperand(OpCode.OP_GET_PROPERTY, OpCode.OP_GET_PROPERTY_LONG, name);
+            try self.emitOpWithOperand(OpCode.OP_GET_PROPERTY, name);
         }
     }
 
@@ -985,7 +976,7 @@ pub const Compiler = struct {
     fn emitReturn(self: *Compiler) !void {
         if (self.type == .INITIALIZER) {
             // We implicitly return the instance from a class initializer method.
-            try self.emitOpWithMediumOperand(OpCode.OP_GET_LOCAL, 0);
+            try self.emitOpWithOperand(OpCode.OP_GET_LOCAL, 0);
         } else {
             // We emit nil because that is the implicit return value in case this function doesn't return anything.
             try self.emitOp(OpCode.OP_NIL);
@@ -995,15 +986,7 @@ pub const Compiler = struct {
 
     fn emitConstant(self: *Compiler, value: Value) !void {
         const index = try self.makeConstant(value);
-        try self.emitConstantOperand(.OP_CONSTANT, .OP_CONSTANT_LONG, index);
-    }
-
-    fn emitConstantOperand(self: *Compiler, short: OpCode, long: OpCode, index: u24) !void {
-        if (index <= 0xFF) {
-            try self.emitOpWithByteOperand(short, @intCast(index));
-        } else {
-            try self.emitOpWithMediumOperand(long, index);
-        }
+        try self.emitOpWithOperand(.OP_CONSTANT, index);
     }
 
     fn emitBytes(self: *Compiler, b1: u8, b2: u8) !void {
@@ -1060,23 +1043,30 @@ pub const Compiler = struct {
         try self.emitByte(@intFromEnum(op));
     }
 
-    fn emitOpWithMediumOperand(self: *Compiler, op: OpCode, operand: u24) !void {
+    /// Emit `op` with a one-byte operand, preceded by as many OP_EXTRA_ARG prefixes
+    /// as needed to hold the high bytes (high byte first). The encoding is minimal:
+    /// the first prefix byte is never 0, which the VM's debug trace relies on.
+    /// This is the only place that emits OP_EXTRA_ARG, so prefixes only ever
+    /// precede an operand-carrying opcode.
+    fn emitOpWithOperand(self: *Compiler, op: OpCode, operand: u32) !void {
         self.traceEmit(op, operand);
+        if (operand > 0xFFFFFF) try self.emitExtraArg(@truncate(operand >> 24));
+        if (operand > 0xFFFF) try self.emitExtraArg(@truncate(operand >> 16));
+        if (operand > 0xFF) try self.emitExtraArg(@truncate(operand >> 8));
         try self.emitByte(@intFromEnum(op));
-        try self.emitMedium(operand);
+        try self.emitByte(@truncate(operand));
     }
 
-    fn emitOpWithByteOperand(self: *Compiler, op: OpCode, operand: u8) !void {
-        self.traceEmit(op, operand);
-        try self.emitByte(@intFromEnum(op));
-        try self.emitByte(operand);
+    fn emitExtraArg(self: *Compiler, b: u8) !void {
+        try self.emitByte(@intFromEnum(OpCode.OP_EXTRA_ARG));
+        try self.emitByte(b);
     }
 
     fn emitByte(self: *Compiler, b: u8) !void {
         try self.currentChunk().writeChunk(b, self.previous.line);
     }
 
-    fn makeConstant(self: *Compiler, v: Value) !u24 {
+    fn makeConstant(self: *Compiler, v: Value) !u32 {
         return self.currentChunk().addValue(v);
     }
 
@@ -1095,7 +1085,7 @@ pub const Compiler = struct {
         std.debug.print("{f}", .{trace});
     }
 
-    fn traceEmit(self: *Compiler, op: OpCode, operand: ?u24) void {
+    fn traceEmit(self: *Compiler, op: OpCode, operand: ?u32) void {
         if (comptime !DEBUG_COMPILER) return;
 
         std.debug.print("{f}", .{CompilerTrace{ .emit = .{
@@ -1175,7 +1165,38 @@ test "scope cleanup batches uncaptured locals" {
     try expectScopeCleanup(0, null, &.{});
     try expectScopeCleanup(1, null, &.{ @intFromEnum(OpCode.OP_POPN), 1 });
     try expectScopeCleanup(255, null, &.{ @intFromEnum(OpCode.OP_POPN), 255 });
-    try expectScopeCleanup(256, null, &.{ @intFromEnum(OpCode.OP_POPN_LONG), 0, 1, 0 });
+    try expectScopeCleanup(256, null, &.{ @intFromEnum(OpCode.OP_EXTRA_ARG), 1, @intFromEnum(OpCode.OP_POPN), 0 });
+}
+
+test "emitOpWithOperand adds the minimal number of OP_EXTRA_ARG prefixes" {
+    const X = @intFromEnum(OpCode.OP_EXTRA_ARG);
+    const C = @intFromEnum(OpCode.OP_CONSTANT);
+    const cases = [_]struct { operand: u32, bytes: []const u8 }{
+        .{ .operand = 0xFF, .bytes = &.{ C, 0xFF } },
+        .{ .operand = 0x100, .bytes = &.{ X, 0x01, C, 0x00 } },
+        .{ .operand = 0xFFFF, .bytes = &.{ X, 0xFF, C, 0xFF } },
+        .{ .operand = 0x10000, .bytes = &.{ X, 0x01, X, 0x00, C, 0x00 } },
+        .{ .operand = 0xFFFFFF, .bytes = &.{ X, 0xFF, X, 0xFF, C, 0xFF } },
+        .{ .operand = 0x1000000, .bytes = &.{ X, 0x01, X, 0x00, X, 0x00, C, 0x00 } },
+        .{ .operand = 0xFFFFFFFF, .bytes = &.{ X, 0xFF, X, 0xFF, X, 0xFF, C, 0xFF } },
+    };
+
+    for (cases) |case| {
+        var scanner = Scanner.init("".ptr);
+        var vm = try VM.init(std.testing.io, std.testing.allocator);
+        defer vm.deinit();
+        var compiler = try Compiler.init(std.testing.io, std.testing.allocator, &scanner, &vm, null, FunctionType.SCRIPT);
+        defer compiler.deinit();
+        compiler.previous.line = 1;
+
+        try compiler.emitOpWithOperand(OpCode.OP_CONSTANT, case.operand);
+
+        const chunk = compiler.currentChunk();
+        try std.testing.expectEqualSlices(u8, case.bytes, chunk.code.items);
+        const d = chunk.decode(0);
+        try std.testing.expectEqual(OpCode.OP_CONSTANT, d.op);
+        try std.testing.expectEqual(case.operand, d.operand);
+    }
 }
 
 test "scope cleanup closes captured locals in stack order" {

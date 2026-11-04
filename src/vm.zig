@@ -212,6 +212,11 @@ pub const VM = struct {
         var code = frame.closure.function.chunk.code.items.ptr;
         var ip = frame.ip;
         defer frame.ip = ip;
+        // High operand bytes collected by OP_EXTRA_ARG prefixes. `readOperand` folds
+        // them into the next operand and resets this to 0. A local (rather than a VM
+        // field) so it can live in a register; a prefix and its opcode always run
+        // back-to-back in the same frame, so it never has to survive a call.
+        var extra: u32 = 0;
 
         if (comptime DEBUG_VM) {
             std.debug.print("== VM execution ==\n", .{});
@@ -220,7 +225,10 @@ pub const VM = struct {
         var instruction_count: usize = 0;
         while (true) {
             const instruction_offset = @intFromPtr(ip) - @intFromPtr(code);
-            if (comptime DEBUG_VM) {
+            // Only trace at an instruction start. The compiler's encoding is minimal (the
+            // first prefix byte is never 0), so `extra != 0` means we're in the middle
+            // of a wide instruction that has already been traced as one folded line.
+            if (comptime DEBUG_VM) if (extra == 0) {
                 if (instruction_count < DEBUG_INSTRUCTION_LIMIT) {
                     std.debug.print("{f}", .{ExecutionTrace{ .vm = self, .offset = instruction_offset }});
                 } else if (instruction_count == DEBUG_INSTRUCTION_LIMIT) {
@@ -229,12 +237,15 @@ pub const VM = struct {
                         .{DEBUG_INSTRUCTION_LIMIT},
                     );
                 }
-            }
+            };
             instruction_count += 1;
 
             const instruction_byte = self.readByte(&ip);
             const instruction: OpCode = std.enums.fromInt(OpCode, instruction_byte) orelse OpCode.ILLEGAL;
             switch (instruction) {
+                OpCode.OP_EXTRA_ARG => {
+                    extra = (extra << 8) | self.readByte(&ip);
+                },
                 OpCode.OP_RETURN => {
                     const result = self.stack.pop().?;
                     self.closeUpvalues(&self.stack.values[frame.slots]);
@@ -261,11 +272,7 @@ pub const VM = struct {
                     try self.stack.append(value.nilValue());
                 },
                 OpCode.OP_CONSTANT => {
-                    const constant = self.readConstant(&ip, constants);
-                    try self.stack.append(constant);
-                },
-                OpCode.OP_CONSTANT_LONG => {
-                    const constant = self.readLongConstant(&ip, constants);
+                    const constant = self.readConstant(&ip, &extra, constants);
                     try self.stack.append(constant);
                 },
                 OpCode.OP_NOT => {
@@ -330,13 +337,7 @@ pub const VM = struct {
                     _ = self.stack.pop();
                 },
                 OpCode.OP_POPN => {
-                    var n = self.readByte(&ip);
-                    while (n > 0) : (n -= 1) {
-                        _ = self.stack.pop();
-                    }
-                },
-                OpCode.OP_POPN_LONG => {
-                    var n = self.readMedium(&ip);
+                    var n = self.readOperand(&ip, &extra);
                     while (n > 0) : (n -= 1) {
                         _ = self.stack.pop();
                     }
@@ -349,11 +350,8 @@ pub const VM = struct {
                     const v = self.stack.pop().?;
                     try self.printProgramValue(v);
                 },
-                OpCode.OP_CLOSURE, OpCode.OP_CLOSURE_LONG => {
-                    const functionValue = if (instruction == .OP_CLOSURE)
-                        self.readConstant(&ip, constants)
-                    else
-                        constants[self.readMedium(&ip)];
+                OpCode.OP_CLOSURE => {
+                    const functionValue = self.readConstant(&ip, &extra, constants);
                     const f = value.asFunction(functionValue);
                     const c = try self.heap.createClosure(f);
                     try self.stack.append(.{ .closure = c });
@@ -376,11 +374,11 @@ pub const VM = struct {
                     initialized = true;
                 },
                 OpCode.OP_GET_UPVALUE => {
-                    const slot = self.readMedium(&ip);
+                    const slot = self.readOperand(&ip, &extra);
                     try self.stack.append(frame.closure.upvalues[slot].location.*);
                 },
                 OpCode.OP_SET_UPVALUE => {
-                    const slot = self.readMedium(&ip);
+                    const slot = self.readOperand(&ip, &extra);
                     frame.closure.upvalues[slot].location.* = self.peekStack(0);
                 },
                 OpCode.OP_CLOSE_UPVALUE => {
@@ -401,11 +399,8 @@ pub const VM = struct {
                     code = frame.closure.function.chunk.code.items.ptr;
                     ip = frame.ip;
                 },
-                OpCode.OP_INVOKE, OpCode.OP_INVOKE_LONG => {
-                    const name = if (instruction == .OP_INVOKE)
-                        self.readConstant(&ip, constants)
-                    else
-                        self.readLongConstant(&ip, constants);
+                OpCode.OP_INVOKE => {
+                    const name = self.readConstant(&ip, &extra, constants);
                     const argCount = self.readByte(&ip);
 
                     // Safe the caller's ip address.
@@ -419,27 +414,18 @@ pub const VM = struct {
                     code = frame.closure.function.chunk.code.items.ptr;
                     ip = frame.ip;
                 },
-                OpCode.OP_CLASS, OpCode.OP_CLASS_LONG => {
-                    const name = if (instruction == .OP_CLASS)
-                        self.readConstant(&ip, constants)
-                    else
-                        self.readLongConstant(&ip, constants);
+                OpCode.OP_CLASS => {
+                    const name = self.readConstant(&ip, &extra, constants);
 
                     try self.stack.append(.{ .class = try self.heap.createClass(name.string) });
                 },
-                OpCode.OP_METHOD, OpCode.OP_METHOD_LONG => {
-                    const name = if (instruction == .OP_METHOD)
-                        self.readConstant(&ip, constants)
-                    else
-                        self.readLongConstant(&ip, constants);
+                OpCode.OP_METHOD => {
+                    const name = self.readConstant(&ip, &extra, constants);
 
                     try self.defineMethod(name.string);
                 },
-                OpCode.OP_GET_PROPERTY, OpCode.OP_GET_PROPERTY_LONG => {
-                    const name = if (instruction == .OP_GET_PROPERTY)
-                        self.readConstant(&ip, constants)
-                    else
-                        self.readLongConstant(&ip, constants);
+                OpCode.OP_GET_PROPERTY => {
+                    const name = self.readConstant(&ip, &extra, constants);
 
                     // Leave the receiver on the stack: bindMethod needs it and
                     // replaces it with the bound method itself.
@@ -456,11 +442,8 @@ pub const VM = struct {
                         return .not_assignable;
                     }
                 },
-                OpCode.OP_SET_PROPERTY, OpCode.OP_SET_PROPERTY_LONG => {
-                    const name = if (instruction == .OP_SET_PROPERTY)
-                        self.readConstant(&ip, constants)
-                    else
-                        self.readLongConstant(&ip, constants);
+                OpCode.OP_SET_PROPERTY => {
+                    const name = self.readConstant(&ip, &extra, constants);
 
                     const v = self.stack.pop().?;
                     const instance = self.stack.pop().?;
@@ -471,18 +454,12 @@ pub const VM = struct {
                         return .not_assignable;
                     }
                 },
-                OpCode.OP_DEFINE_GLOBAL, OpCode.OP_DEFINE_GLOBAL_LONG => {
-                    const identifier = if (instruction == .OP_DEFINE_GLOBAL)
-                        self.readConstant(&ip, constants)
-                    else
-                        self.readLongConstant(&ip, constants);
+                OpCode.OP_DEFINE_GLOBAL => {
+                    const identifier = self.readConstant(&ip, &extra, constants);
                     try self.globals.put(identifier.string, self.stack.pop().?);
                 },
-                OpCode.OP_GET_GLOBAL, OpCode.OP_GET_GLOBAL_LONG => {
-                    const identfier = if (instruction == .OP_GET_GLOBAL)
-                        self.readConstant(&ip, constants)
-                    else
-                        self.readLongConstant(&ip, constants);
+                OpCode.OP_GET_GLOBAL => {
+                    const identfier = self.readConstant(&ip, &extra, constants);
                     const v = self.globals.get(identfier.string);
 
                     if (v == null) {
@@ -491,11 +468,8 @@ pub const VM = struct {
                         try self.stack.append(v.?);
                     }
                 },
-                OpCode.OP_SET_GLOBAL, OpCode.OP_SET_GLOBAL_LONG => {
-                    const identifier = if (instruction == .OP_SET_GLOBAL)
-                        self.readConstant(&ip, constants)
-                    else
-                        self.readLongConstant(&ip, constants);
+                OpCode.OP_SET_GLOBAL => {
+                    const identifier = self.readConstant(&ip, &extra, constants);
                     const name = identifier.string;
                     if (self.globals.contains(name)) {
                         try self.globals.put(name, self.peekStack(0));
@@ -504,11 +478,11 @@ pub const VM = struct {
                     }
                 },
                 OpCode.OP_GET_LOCAL => {
-                    const slot = self.readMedium(&ip);
+                    const slot = self.readOperand(&ip, &extra);
                     try self.stack.append(self.stack.values[frame.slots + slot]);
                 },
                 OpCode.OP_SET_LOCAL => {
-                    const slot = self.readMedium(&ip);
+                    const slot = self.readOperand(&ip, &extra);
                     self.stack.values[frame.slots + slot] = self.peekStack(0);
                 },
                 OpCode.OP_JUMP_IF_FALSE => {
@@ -525,11 +499,8 @@ pub const VM = struct {
                     const offset = self.readShort(&ip);
                     ip -= offset;
                 },
-                OpCode.OP_ARRAY, OpCode.OP_ARRAY_LONG => {
-                    const len = if (instruction == .OP_ARRAY)
-                        self.readByte(&ip)
-                    else
-                        self.readMedium(&ip);
+                OpCode.OP_ARRAY => {
+                    const len = self.readOperand(&ip, &extra);
                     const array: *ObjArray = try self.heap.createArray(len);
                     const items = self.stack.values[self.stack.len - len .. self.stack.len];
                     try array.values.appendSlice(self.heap.allocator, items);
@@ -616,14 +587,18 @@ pub const VM = struct {
         return (@as(u24, high) << 16) | (@as(u24, mid) << 8) | low;
     }
 
-    inline fn readConstant(self: *VM, ip: *[*]u8, constants: []Value) Value {
-        const pos = self.readByte(ip);
-        return constants[pos];
+    /// Read an instruction's one-byte operand and fold in the high bytes collected
+    /// by any preceding OP_EXTRA_ARG prefixes. Resetting `extra` here is what makes
+    /// prefixes belong only to the next operand-carrying instruction, so every case
+    /// that takes a (prefixable) operand must go through this function.
+    inline fn readOperand(self: *VM, ip: *[*]u8, extra: *u32) u32 {
+        const operand = (extra.* << 8) | self.readByte(ip);
+        extra.* = 0;
+        return operand;
     }
 
-    inline fn readLongConstant(self: *VM, ip: *[*]u8, constants: []Value) Value {
-        const pos = self.readMedium(ip);
-        return constants[pos];
+    inline fn readConstant(self: *VM, ip: *[*]u8, extra: *u32, constants: []Value) Value {
+        return constants[self.readOperand(ip, extra)];
     }
 
     inline fn binaryOp(self: *VM, comptime op: BinaryOperator) !?RuntimeFault {
@@ -956,8 +931,7 @@ const ExecutionTrace = struct {
 
         if (stack.len > 0) try writer.writeAll(" <- top");
 
-        const byte = frame.closure.function.chunk.code.items[self.offset];
-        const op = std.enums.fromInt(OpCode, byte) orelse OpCode.ILLEGAL;
+        const op = frame.closure.function.chunk.decode(self.offset).op;
         if (op == OpCode.OP_JUMP_IF_FALSE and stack.len > 0) {
             try writer.writeAll(if (isFalsey(stack[stack.len - 1])) " | taken" else " | not taken");
         }
