@@ -153,6 +153,7 @@ pub const VM = struct {
         try vm.defineNativeMethod(vm.arrayClass, "len", 0, arrayLenNative);
         try vm.defineNativeMethod(vm.arrayClass, "get", 1, arrayGetNative);
         try vm.defineNativeMethod(vm.arrayClass, "set", 2, arraySetNative);
+        try vm.defineNativeMethod(vm.arrayClass, "join", 1, arrayJoinNative);
         vm.heap.garbageCollectionEnabled = true;
 
         try vm.defineNative("clock", 0, clockNative);
@@ -968,6 +969,23 @@ pub fn arraySetNative(_: *VM, _: usize, args: []const Value) !Value {
     const items = args[0].array.values.items;
     items[try arrayIndex(items.len, args[1])] = args[2];
     return args[2];
+}
+
+/// Joins the items into a new string, with the separator `args[1]` between them.
+/// Items are converted like `print` does, so strings are included as-is.
+pub fn arrayJoinNative(vm: *VM, _: usize, args: []const Value) !Value {
+    if (!value.isString(args[1])) return Errors.RuntimeError;
+    const separator = args[1].string.chars;
+
+    var out: std.Io.Writer.Allocating = .init(vm.heap.allocator);
+    defer out.deinit();
+    for (args[0].array.values.items, 0..) |item, i| {
+        if (i > 0) try out.writer.writeAll(separator);
+        try value.write(item, &out.writer);
+    }
+
+    // `takeString` adopts the buffer, so `out.deinit()` has nothing left to free.
+    return .{ .string = try vm.heap.takeString(try out.toOwnedSlice()) };
 }
 
 /// Indices must be whole numbers in `0..len`.

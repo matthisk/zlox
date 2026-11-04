@@ -397,3 +397,23 @@ test "049 array methods" {
 test "050 array index out of range" {
     try std.testing.expectError(error.RuntimeError, executeTestFile(std.testing.allocator, "050_array_index_out_of_range.lox"));
 }
+
+test "051 array join" {
+    const source = try loadTestFile(std.testing.allocator, "051_array_join.lox");
+    defer std.testing.allocator.free(source);
+
+    var scanner = Scanner.init(source.ptr);
+    var vm = try VM.init(std.testing.io, std.testing.allocator);
+    defer vm.deinit();
+    vm.heap.nextGC = 1;
+    var compiler = try Compiler.init(std.testing.io, std.testing.allocator, &scanner, &vm, null, FunctionType.SCRIPT);
+    defer compiler.deinit();
+
+    const function = try compiler.compile();
+    try std.testing.expectEqual(null, try vm.startScript(function));
+    try std.testing.expectEqual(InterpretResult.OK, try vm.run());
+
+    try std.testing.expectEqualStrings("a, 1, true, nil", vm.getGlobal("joined").?.string.chars);
+    try std.testing.expectEqualStrings("", vm.getGlobal("empty").?.string.chars);
+    try std.testing.expectEqualStrings("only", vm.getGlobal("single").?.string.chars);
+}
