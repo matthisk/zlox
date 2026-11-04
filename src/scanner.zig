@@ -290,7 +290,10 @@ pub const Scanner = struct {
     }
 
     fn checkKeyword(self: *Scanner, start: usize, length: usize, rest: []const u8, t: TokenType) TokenType {
-        if (std.mem.eql(u8, self.start[start..(start + length)], rest)) return t;
+        // The identifier must be exactly as long as the keyword, otherwise e.g.
+        // `origin` would be scanned as `or`.
+        if (self.current - self.start == start + length and
+            std.mem.eql(u8, self.start[start..(start + length)], rest)) return t;
         return TokenType.TOKEN_IDENTIFIER;
     }
 

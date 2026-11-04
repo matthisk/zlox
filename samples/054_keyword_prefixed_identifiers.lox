@@ -1,0 +1,11 @@
+// Identifiers that start with a keyword must still be scanned as identifiers.
+var origin = true;   // or
+var android = true;  // and
+var format = true;   // for
+var funky = true;    // fun
+var iffy = true;     // if
+var nilly = true;    // nil
+var thistle = true;  // this
+var variable = true; // var
+var classy = true;   // class
+var defaults = true; // default

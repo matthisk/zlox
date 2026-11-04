@@ -417,3 +417,23 @@ test "051 array join" {
     try std.testing.expectEqualStrings("", vm.getGlobal("empty").?.string.chars);
     try std.testing.expectEqualStrings("only", vm.getGlobal("single").?.string.chars);
 }
+
+test "054 keyword prefixed identifiers" {
+    const source = try loadTestFile(std.testing.allocator, "054_keyword_prefixed_identifiers.lox");
+    defer std.testing.allocator.free(source);
+
+    var scanner = Scanner.init(source.ptr);
+    var vm = try VM.init(std.testing.io, std.testing.allocator);
+    defer vm.deinit();
+    var compiler = try Compiler.init(std.testing.io, std.testing.allocator, &scanner, &vm, null, FunctionType.SCRIPT);
+    defer compiler.deinit();
+
+    const function = try compiler.compile();
+    try std.testing.expectEqual(null, try vm.startScript(function));
+    try std.testing.expectEqual(InterpretResult.OK, try vm.run());
+
+    for ([_][]const u8{ "origin", "android", "format", "funky", "iffy", "nilly", "thistle", "variable", "classy", "defaults" }) |name| {
+        const result = vm.getGlobal(name) orelse return error.MissingGlobal;
+        try std.testing.expectEqual(true, result.bool);
+    }
+}
