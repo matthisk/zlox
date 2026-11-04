@@ -1,0 +1,142 @@
+// A tiny raytracer that renders a few spheres to a plain-text PPM (P3) image.
+// Like the Mandelbrot sample, every line of the file is collected in an
+// array first, and then the whole array is joined and written in one go.
+//
+// Features: diffuse (Lambert) shading, hard shadows, and mirror reflections.
+
+var WIDTH = 1920;
+var HEIGHT = 1080;
+var MAX_DEPTH = 3;   // how many times a ray may bounce off reflective surfaces
+var EPSILON = 0.001; // avoids a ray hitting the surface it just left
+
+var NEWLINE = "
+";
+
+// --- Vector math -----------------------------------------------------------
+
+class Vec {
+  init(x, y, z) {
+    this.x = x;
+    this.y = y;
+    this.z = z;
+  }
+
+  add(o) { return Vec(this.x + o.x, this.y + o.y, this.z + o.z); }
+  sub(o) { return Vec(this.x - o.x, this.y - o.y, this.z - o.z); }
+  scale(s) { return Vec(this.x * s, this.y * s, this.z * s); }
+  mul(o) { return Vec(this.x * o.x, this.y * o.y, this.z * o.z); }
+  dot(o) { return this.x * o.x + this.y * o.y + this.z * o.z; }
+  length() { return sqrt(this.dot(this)); }
+  norm() { return this.scale(1 / this.length()); }
+}
+
+// --- Scene -----------------------------------------------------------------
+
+class Sphere {
+  init(center, radius, color, reflectivity) {
+    this.center = center;
+    this.radius = radius;
+    this.color = color;
+    this.reflectivity = reflectivity; // 0 = matte, 1 = perfect mirror
+  }
+
+  // Distance along the ray to the nearest hit, or -1 if the ray misses.
+  // Solves |origin + t*dir - center|^2 = r^2 for t (dir is normalized).
+  intersect(origin, dir) {
+    var oc = origin.sub(this.center);
+    var b = oc.dot(dir);
+    var c = oc.dot(oc) - this.radius * this.radius;
+    var disc = b * b - c;
+    if (disc < 0) return -1;
+    var s = sqrt(disc);
+    var t = -b - s;
+    if (t > EPSILON) return t;
+    t = -b + s;
+    if (t > EPSILON) return t;
+    return -1;
+  }
+}
+
+var spheres = [
+  Sphere(Vec(0, -1000, 0), 999, Vec(0.8, 0.8, 0.8), 0.2),  // huge sphere as the floor
+  Sphere(Vec(-1.2, 0, 4), 1, Vec(0.9, 0.2, 0.2), 0.3),     // red
+  Sphere(Vec(1.2, 0, 4.5), 1, Vec(0.2, 0.4, 0.9), 0.6),    // shiny blue
+  Sphere(Vec(0, -0.5, 2.8), 0.5, Vec(0.2, 0.9, 0.3), 0.0)  // small matte green
+];
+
+var LIGHT_DIR = Vec(-1, 1.5, -1).norm(); // direction *towards* the light
+var AMBIENT = 0.1;
+
+// Returns the closest sphere hit by the ray, storing the distance in hitT.
+var hitT = 0;
+fun closestHit(origin, dir) {
+  var closest = nil;
+  hitT = 1000000;
+  for (var i = 0; i < spheres.len(); i = i + 1) {
+    var sphere = spheres.get(i);
+    var t = sphere.intersect(origin, dir);
+    if (t > 0 and t < hitT) {
+      hitT = t;
+      closest = sphere;
+    }
+  }
+  return closest;
+}
+
+// Sky color: a simple vertical gradient from white to light blue.
+fun sky(dir) {
+  var t = 0.5 * (dir.y + 1);
+  return Vec(1, 1, 1).scale(1 - t).add(Vec(0.5, 0.7, 1.0).scale(t));
+}
+
+// Follows a single ray into the scene and returns its color.
+fun trace(origin, dir, depth) {
+  var sphere = closestHit(origin, dir);
+  if (sphere == nil) return sky(dir);
+
+  var point = origin.add(dir.scale(hitT));
+  var normal = point.sub(sphere.center).norm();
+
+  // Diffuse lighting, unless something blocks the path to the light.
+  var diffuse = normal.dot(LIGHT_DIR);
+  if (diffuse < 0) diffuse = 0;
+  if (diffuse > 0 and closestHit(point, LIGHT_DIR) != nil) diffuse = 0;
+  var color = sphere.color.scale(AMBIENT + diffuse * (1 - AMBIENT));
+
+  // Mirror reflection: r = d - 2(d.n)n
+  var r = sphere.reflectivity;
+  if (r > 0 and depth < MAX_DEPTH) {
+    var reflected = dir.sub(normal.scale(2 * dir.dot(normal)));
+    var bounce = trace(point, reflected, depth + 1);
+    color = color.scale(1 - r).add(bounce.mul(sphere.color).scale(r));
+  }
+
+  return color;
+}
+
+// Converts a 0..1 channel to a 0..255 integer string.
+fun channel(c) {
+  if (c > 1) c = 1;
+  return str(floor(255 * c));
+}
+
+// --- Render ----------------------------------------------------------------
+
+// Camera sits at the origin looking down +z; the image plane is at z = 1.
+var camera = Vec(0, 0, 0);
+var aspect = WIDTH / HEIGHT;
+
+var lines = ["P3", str(WIDTH) + " " + str(HEIGHT), "255"];
+
+for (var y = 0; y < HEIGHT; y = y + 1) {
+  for (var x = 0; x < WIDTH; x = x + 1) {
+    // Map the pixel to [-1, 1] on the image plane (y flipped so up is up).
+    var px = (2 * (x + 0.5) / WIDTH - 1) * aspect;
+    var py = 1 - 2 * (y + 0.5) / HEIGHT;
+    var dir = Vec(px, py, 1).norm();
+    var c = trace(camera, dir, 0);
+    lines.push(channel(c.x) + " " + channel(c.y) + " " + channel(c.z));
+  }
+}
+
+writeFile(".zig-cache/zlox_raytracer_sample.ppm", lines.join(NEWLINE) + NEWLINE);
