@@ -1,0 +1,6 @@
+var a = ["a", 1, true, nil];
+var joined = a.join(", ");
+print joined;
+
+var empty = [].join("-");
+var single = ["only"].join("-");

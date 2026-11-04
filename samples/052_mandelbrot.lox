@@ -1,0 +1,49 @@
+// Renders the Mandelbrot set to a plain-text PPM (P3) image.
+// Every line of the file is collected in an array first, and then the
+// whole array is joined and written to disk in one go.
+
+var WIDTH = 800;
+var HEIGHT = 600;
+var MAX_ITER = 100;
+
+// Region of the complex plane to render.
+var X_MIN = -2.5;
+var X_MAX = 1.0;
+var Y_MIN = -1.25;
+var Y_MAX = 1.25;
+
+// Lox strings have no escape sequences, so a newline is a literal line break.
+var NEWLINE = "
+";
+
+// How many iterations it takes z = z^2 + c to escape (|z| > 2).
+fun mandelbrot(cr, ci) {
+  var zr = 0;
+  var zi = 0;
+  for (var i = 0; i < MAX_ITER; i = i + 1) {
+    if (zr * zr + zi * zi > 4) return i;
+    var t = zr * zr - zi * zi + cr;
+    zi = 2 * zr * zi + ci;
+    zr = t;
+  }
+  return MAX_ITER;
+}
+
+// Header: magic number, width height, max color value.
+var lines = ["P3", str(WIDTH) + " " + str(HEIGHT), "255"];
+
+for (var y = 0; y < HEIGHT; y = y + 1) {
+  var ci = Y_MIN + (Y_MAX - Y_MIN) * y / HEIGHT;
+  for (var x = 0; x < WIDTH; x = x + 1) {
+    var cr = X_MIN + (X_MAX - X_MIN) * x / WIDTH;
+    var n = mandelbrot(cr, ci);
+    if (n == MAX_ITER) {
+      lines.push("0 0 0"); // inside the set: black
+    } else {
+      var t = n / MAX_ITER; // simple gradient based on escape speed
+      lines.push(str(floor(255 * t)) + " " + str(floor(255 * t * t)) + " " + str(floor(255 * (1 - t))));
+    }
+  }
+}
+
+writeFile(".zig-cache/zlox_mandelbrot_sample.ppm", lines.join(NEWLINE) + NEWLINE);
