@@ -5,6 +5,8 @@ const Chunk = @import("chunk.zig").Chunk;
 const DEBUG_STRING_LIMIT = 40;
 const DEBUG_GC = @import("config").debug_gc;
 
+/// `args[0]` is stack slot 0 of the call: the receiver (`this`) for a method call,
+/// or the native function itself for a plain call. The arguments follow at `args[1..]`.
 pub const NativeFn = *const fn (vm: *VM, argCount: usize, args: []const Value) anyerror!Value;
 
 pub const Value = union(enum) {
@@ -29,7 +31,8 @@ pub const ObjArray = struct {
 pub const ObjClass = struct {
     obj: Obj = .{ .kind = .class },
     name: *ObjStr,
-    methods: std.AutoHashMap(*ObjStr, *ObjClosure),
+    /// Either a `.closure` (methods written in Lox) or a `.native` (methods written in Zig).
+    methods: std.AutoHashMap(*ObjStr, Value),
 };
 
 pub const ObjInstance = struct {
@@ -41,7 +44,8 @@ pub const ObjInstance = struct {
 pub const ObjBoundMethod = struct {
     obj: Obj = .{ .kind = .bound_method },
     receiver: Value,
-    method: *ObjClosure,
+    /// Either a `.closure` or a `.native`, see `ObjClass.methods`.
+    method: Value,
 };
 
 pub const ObjClosure = struct {
@@ -361,7 +365,10 @@ pub const Formatter = struct {
             },
             .class => |class| try writer.print("<class {s}>", .{class.name.chars}),
             .instance => |instance| try writer.print("<{s} instance>", .{instance.class.name.chars}),
-            .bound_method => |bound| try writer.print("<bound {s}>", .{bound.method.function.name.chars}),
+            .bound_method => |bound| switch (bound.method) {
+                .closure => |c| try writer.print("<bound {s}>", .{c.function.name.chars}),
+                else => try writer.writeAll("<bound native>"),
+            },
         }
     }
 };
@@ -382,7 +389,10 @@ pub fn write(v: Value, writer: *std.Io.Writer) std.Io.Writer.Error!void {
         .array => try writer.print("{f}", .{Formatter{ .value = v }}),
         .class => |class| try writer.writeAll(class.name.chars),
         .instance => |instance| try writer.print("{s} instance", .{instance.class.name.chars}),
-        .bound_method => |bound| try writer.writeAll(bound.method.function.name.chars),
+        .bound_method => |bound| switch (bound.method) {
+            .closure => |c| try writer.writeAll(c.function.name.chars),
+            else => try writer.writeAll("<native_fn>"),
+        },
     }
 }
 

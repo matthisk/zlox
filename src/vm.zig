@@ -131,6 +131,8 @@ pub const VM = struct {
     frameCount: usize,
     openUpvalues: ?*ObjUpvalue = null,
     initString: *ObjStr = undefined,
+    /// The class of every `.array` value, see `getClass`. Its methods are natives.
+    arrayClass: *ObjClass = undefined,
 
     pub fn init(io: std.Io, allocator: std.mem.Allocator) !VM {
         var vm = VM{
@@ -141,9 +143,17 @@ pub const VM = struct {
             .globals = std.AutoHashMap(*ObjStr, Value).init(allocator),
             .frameCount = 0,
         };
-        vm.heap.garbageCollectionEnabled = true;
-        vm.initString = try vm.heap.copyString("init");
         errdefer vm.deinit();
+        vm.initString = try vm.heap.copyString("init");
+        // Build the array class before enabling the GC, so we don't have to keep
+        // the half-built class and its method names rooted on the stack.
+        vm.arrayClass = try vm.heap.createClass(try vm.heap.copyString("Array"));
+        try vm.defineNativeMethod(vm.arrayClass, "push", 1, arrayPushNative);
+        try vm.defineNativeMethod(vm.arrayClass, "pop", 0, arrayPopNative);
+        try vm.defineNativeMethod(vm.arrayClass, "len", 0, arrayLenNative);
+        try vm.defineNativeMethod(vm.arrayClass, "get", 1, arrayGetNative);
+        try vm.defineNativeMethod(vm.arrayClass, "set", 2, arraySetNative);
+        vm.heap.garbageCollectionEnabled = true;
 
         try vm.defineNative("clock", 0, clockNative);
         try vm.defineNative("random", 0, randomNative);
@@ -430,11 +440,14 @@ pub const VM = struct {
                     // replaces it with the bound method itself.
                     const v = self.peekStack(0);
                     if (value.isInstance(v)) {
-                        const instance = v.instance;
-                        if (instance.fields.get(name.string)) |val| {
+                        if (v.instance.fields.get(name.string)) |val| {
                             _ = self.stack.pop();
                             try self.stack.append(val);
-                        } else if (try self.bindMethod(instance.class, name.string)) |err| {
+                            continue;
+                        }
+                    }
+                    if (self.getClass(v)) |class| {
+                        if (try self.bindMethod(class, name.string)) |err| {
                             return err;
                         }
                     } else {
@@ -517,15 +530,14 @@ pub const VM = struct {
     inline fn defineMethod(self: *VM, name: *ObjStr) !void {
         const method = self.peekStack(0);
         const class = self.peekStack(1).class;
-        try class.methods.put(name, method.closure);
+        try class.methods.put(name, method);
         _ = self.stack.pop();
     }
 
     inline fn bindMethod(self: *VM, class: *ObjClass, name: *ObjStr) !?RuntimeFault {
-        const method = class.methods.get(name);
-        if (method == null) return .{ .unknown_property = .{ .name = name.chars } };
+        const method = class.methods.get(name) orelse return .{ .unknown_property = .{ .name = name.chars } };
 
-        const bound = try self.heap.createBoundMethod(self.peekStack(0), method.?);
+        const bound = try self.heap.createBoundMethod(self.peekStack(0), method);
         _ = self.stack.pop();
         try self.stack.append(.{ .bound_method = bound });
 
@@ -680,21 +692,32 @@ pub const VM = struct {
 
     inline fn invoke(self: *VM, name: *ObjStr, argCount: u8) !?RuntimeFault {
         const receiver = self.peekStack(argCount);
-        if (!value.isInstance(receiver)) {
-            return .not_callable;
+
+        // A field shadows a method of the same name. Only instances have fields.
+        if (value.isInstance(receiver)) {
+            if (receiver.instance.fields.get(name)) |f| {
+                self.stack.values[self.stack.len - argCount - 1] = f;
+                return try self.callValue(f, argCount);
+            }
         }
 
-        if (receiver.instance.fields.get(name)) |f| {
-            self.stack.values[self.stack.len - argCount - 1] = f;
-            return try self.callValue(f, argCount);
-        }
+        const class = self.getClass(receiver) orelse return .not_callable;
+        return self.invokeFromClass(class, name, argCount);
+    }
 
-        return self.invokeFromClass(receiver.instance.class, name, argCount);
+    /// Every value that can have methods has a class. Instances carry a pointer to
+    /// theirs; built-in types like arrays share a class owned by the VM.
+    inline fn getClass(self: *VM, v: Value) ?*ObjClass {
+        return switch (v) {
+            .instance => |instance| instance.class,
+            .array => self.arrayClass,
+            else => null,
+        };
     }
 
     inline fn invokeFromClass(self: *VM, receiver: *ObjClass, name: *ObjStr, argCount: u8) !?RuntimeFault {
         if (receiver.methods.get(name)) |m| {
-            return try self.callValue(.{ .closure = m }, argCount);
+            return try self.callMethod(m, argCount);
         } else {
             return .{ .unknown_property = .{ .name = name.chars } };
         }
@@ -708,48 +731,56 @@ pub const VM = struct {
                 const instance = try self.heap.createInstance(class);
                 self.stack.values[self.stack.len - argCount - 1] = .{ .instance = instance };
                 if (class.methods.get(self.initString)) |initMethod| {
-                    return try self.call(initMethod, argCount);
+                    return try self.callMethod(initMethod, argCount);
                 } else if (argCount != 0) {
                     return .{ .expected_arguments = .{ .expected = 0, .actual = argCount } };
                 }
                 return null;
             },
-            .bound_method => |method| {
-                if (argCount != method.method.function.arity) {
-                    return .{ .expected_arguments = .{
-                        .expected = method.method.function.arity,
-                        .actual = argCount,
-                    } };
-                }
-                // Slot 0 of the new frame holds `this`, so overwrite the bound
-                // method with its receiver.
-                self.stack.values[self.stack.len - argCount - 1] = method.receiver;
-                return try self.call(method.method, argCount);
+            .bound_method => |bound| {
+                // Slot 0 holds `this`, so overwrite the bound method with its receiver.
+                self.stack.values[self.stack.len - argCount - 1] = bound.receiver;
+                return try self.callMethod(bound.method, argCount);
             },
-            .closure => |closure| {
-                if (argCount != closure.function.arity) {
-                    return .{ .expected_arguments = .{
-                        .expected = closure.function.arity,
-                        .actual = argCount,
-                    } };
-                }
-                return try self.call(closure, argCount);
-            },
-            .native => |native| {
-                if (argCount != native.arity) {
-                    return .{ .expected_arguments = .{
-                        .expected = native.arity,
-                        .actual = argCount,
-                    } };
-                }
-                const firstArgumentOnStackOffset = self.stack.len - argCount;
-                const result = try native.function(self, argCount, self.stack.values[firstArgumentOnStackOffset..self.stack.len]);
-                self.stack.shrinkRetainingCapacity(firstArgumentOnStackOffset - 1);
-                try self.stack.append(result);
-                return null;
-            },
+            .closure => |closure| return try self.callClosure(closure, argCount),
+            .native => |native| return try self.callNative(native, argCount),
             else => return .not_callable,
         }
+    }
+
+    /// Calls a method from `ObjClass.methods`. The receiver must already be in slot 0.
+    inline fn callMethod(self: *VM, method: Value, argCount: u8) !?RuntimeFault {
+        return switch (method) {
+            .closure => |closure| try self.callClosure(closure, argCount),
+            .native => |native| try self.callNative(native, argCount),
+            else => unreachable, // classes only hold closures and natives
+        };
+    }
+
+    inline fn callClosure(self: *VM, closure: *ObjClosure, argCount: u8) !?RuntimeFault {
+        if (argCount != closure.function.arity) {
+            return .{ .expected_arguments = .{
+                .expected = closure.function.arity,
+                .actual = argCount,
+            } };
+        }
+        return try self.call(closure, argCount);
+    }
+
+    inline fn callNative(self: *VM, native: *value.ObjNative, argCount: u8) !?RuntimeFault {
+        if (argCount != native.arity) {
+            return .{ .expected_arguments = .{
+                .expected = native.arity,
+                .actual = argCount,
+            } };
+        }
+        // Like a closure's frame, the native sees slot 0 (the receiver or the
+        // native itself) followed by the arguments.
+        const slot0 = self.stack.len - argCount - 1;
+        const result = try native.function(self, argCount, self.stack.values[slot0..self.stack.len]);
+        self.stack.shrinkRetainingCapacity(slot0);
+        try self.stack.append(result);
+        return null;
     }
 
     fn call(self: *VM, closure: *ObjClosure, argCount: u8) !?RuntimeFault {
@@ -763,6 +794,11 @@ pub const VM = struct {
         frame.ip = closure.function.chunk.code.items.ptr;
         frame.slots = self.stack.len - argCount - 1;
         return null;
+    }
+
+    fn defineNativeMethod(self: *VM, class: *ObjClass, name: []const u8, arity: u8, native: value.NativeFn) !void {
+        const method = try self.heap.createNative(arity, native);
+        try class.methods.put(try self.heap.copyString(name), .{ .native = method });
     }
 
     fn defineNative(self: *VM, name: []const u8, arity: u8, native: value.NativeFn) !void {
@@ -837,13 +873,13 @@ pub fn writeFileNative(vm: *VM, argCount: usize, args: []const Value) !Value {
     if (argCount != 2) {
         return Errors.RuntimeError;
     }
-    if (!value.isString(args[0]) or !value.isString(args[1])) {
+    if (!value.isString(args[1]) or !value.isString(args[2])) {
         return Errors.RuntimeError;
     }
 
     try std.Io.Dir.cwd().writeFile(vm.io, .{
-        .sub_path = args[0].string.chars,
-        .data = args[1].string.chars,
+        .sub_path = args[1].string.chars,
+        .data = args[2].string.chars,
     });
 
     return value.nilValue();
@@ -853,14 +889,14 @@ pub fn appendFileNative(vm: *VM, argCount: usize, args: []const Value) !Value {
     if (argCount != 2) {
         return Errors.RuntimeError;
     }
-    if (!value.isString(args[0]) or !value.isString(args[1])) {
+    if (!value.isString(args[1]) or !value.isString(args[2])) {
         return Errors.RuntimeError;
     }
 
     // std.Io has no append mode, so open without truncating and write at the end.
-    const file = try std.Io.Dir.cwd().createFile(vm.io, args[0].string.chars, .{ .truncate = false });
+    const file = try std.Io.Dir.cwd().createFile(vm.io, args[1].string.chars, .{ .truncate = false });
     defer file.close(vm.io);
-    try file.writePositionalAll(vm.io, args[1].string.chars, try file.length(vm.io));
+    try file.writePositionalAll(vm.io, args[2].string.chars, try file.length(vm.io));
 
     return value.nilValue();
 }
@@ -869,7 +905,7 @@ pub fn strNative(vm: *VM, argCount: usize, args: []const Value) !Value {
     if (argCount != 1) {
         return Errors.RuntimeError;
     }
-    const v = args[0];
+    const v = args[1];
     const str = switch (v) {
         .bool => |b| try vm.heap.copyString(if (b) "true" else "false"),
         .number => |n| try vm.heap.takeString(try std.fmt.allocPrint(vm.heap.allocator, "{d}", .{n})),
@@ -891,20 +927,55 @@ pub fn sqrtNative(_: *VM, argCount: usize, args: []const Value) !Value {
     if (argCount != 1) {
         return Errors.RuntimeError;
     }
-    if (!value.isNumber(args[0])) {
+    if (!value.isNumber(args[1])) {
         return Errors.RuntimeError;
     }
-    return value.numberValue(std.math.sqrt(args[0].number));
+    return value.numberValue(std.math.sqrt(args[1].number));
 }
 
 pub fn floorNative(_: *VM, argCount: usize, args: []const Value) !Value {
     if (argCount != 1) {
         return Errors.RuntimeError;
     }
-    if (!value.isNumber(args[0])) {
+    if (!value.isNumber(args[1])) {
         return Errors.RuntimeError;
     }
-    return value.numberValue(@floor(args[0].number));
+    return value.numberValue(@floor(args[1].number));
+}
+
+// Array methods. `args[0]` is the receiver: `getClass` only dispatches to these
+// for `.array` values, so it is always an array.
+
+pub fn arrayPushNative(vm: *VM, _: usize, args: []const Value) !Value {
+    try args[0].array.values.append(vm.heap.allocator, args[1]);
+    return value.nilValue();
+}
+
+pub fn arrayPopNative(_: *VM, _: usize, args: []const Value) !Value {
+    return args[0].array.values.pop() orelse Errors.RuntimeError;
+}
+
+pub fn arrayLenNative(_: *VM, _: usize, args: []const Value) !Value {
+    return value.numberValue(@floatFromInt(args[0].array.values.items.len));
+}
+
+pub fn arrayGetNative(_: *VM, _: usize, args: []const Value) !Value {
+    const items = args[0].array.values.items;
+    return items[try arrayIndex(items.len, args[1])];
+}
+
+pub fn arraySetNative(_: *VM, _: usize, args: []const Value) !Value {
+    const items = args[0].array.values.items;
+    items[try arrayIndex(items.len, args[1])] = args[2];
+    return args[2];
+}
+
+/// Indices must be whole numbers in `0..len`.
+fn arrayIndex(len: usize, index: Value) !usize {
+    if (!value.isNumber(index)) return Errors.RuntimeError;
+    const n = index.number;
+    if (n < 0 or n != @floor(n) or n >= @as(f64, @floatFromInt(len))) return Errors.RuntimeError;
+    return @intFromFloat(n);
 }
 
 pub fn clockNative(vm: *VM, _: usize, _: []const Value) !Value {
@@ -996,11 +1067,12 @@ test "writeFile native requires a path and contents string" {
 
     const contents = try vm.heap.copyString("contents");
     const args = [_]Value{
+        .nil, // slot 0: the native itself, unused here
         value.numberValue(1),
         .{ .string = contents },
     };
 
-    try std.testing.expectError(error.RuntimeError, writeFileNative(&vm, args.len, &args));
+    try std.testing.expectError(error.RuntimeError, writeFileNative(&vm, args.len - 1, &args));
 }
 
 test "stack overflow is a runtime fault and resets the VM" {

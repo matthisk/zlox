@@ -1,0 +1,3 @@
+var positive = floor(2.7);
+var negative = floor(-2.3);
+var whole = floor(5);

@@ -372,3 +372,28 @@ test "048 append file" {
     defer std.testing.allocator.free(contents);
     try std.testing.expectEqualStrings("Hello from Lox!", contents);
 }
+
+test "049 array methods" {
+    const source = try loadTestFile(std.testing.allocator, "049_array_methods.lox");
+    defer std.testing.allocator.free(source);
+
+    var scanner = Scanner.init(source.ptr);
+    var vm = try VM.init(std.testing.io, std.testing.allocator);
+    defer vm.deinit();
+    // Collect on every allocation, so the array class and its natives must be rooted.
+    vm.heap.nextGC = 1;
+    var compiler = try Compiler.init(std.testing.io, std.testing.allocator, &scanner, &vm, null, FunctionType.SCRIPT);
+    defer compiler.deinit();
+
+    const function = try compiler.compile();
+    try std.testing.expectEqual(null, try vm.startScript(function));
+    try std.testing.expectEqual(InterpretResult.OK, try vm.run());
+
+    try std.testing.expectEqual(@as(f64, 3), vm.getGlobal("popped").?.number);
+    try std.testing.expectEqual(@as(f64, 3), vm.getGlobal("length").?.number);
+    try std.testing.expectEqualStrings("first", vm.getGlobal("first").?.string.chars);
+}
+
+test "050 array index out of range" {
+    try std.testing.expectError(error.RuntimeError, executeTestFile(std.testing.allocator, "050_array_index_out_of_range.lox"));
+}

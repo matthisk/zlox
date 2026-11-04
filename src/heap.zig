@@ -72,6 +72,7 @@ pub const Heap = struct {
 
         try self.markRoots(vm);
         try self.markObj(&vm.initString.obj);
+        try self.markObj(&vm.arrayClass.obj);
         try self.traceReferences();
         self.removeWhiteInternedStrings();
         self.sweep();
@@ -198,7 +199,7 @@ pub const Heap = struct {
                 var it = class.methods.iterator();
                 while (it.next()) |entry| {
                     try self.markObj(&entry.key_ptr.*.obj);
-                    try self.markObj(&entry.value_ptr.*.obj);
+                    try self.markValue(entry.value_ptr.*);
                 }
             },
             .instance => {
@@ -213,7 +214,7 @@ pub const Heap = struct {
             .bound_method => {
                 const bound: *ObjBoundMethod = @fieldParentPtr("obj", obj);
                 try self.markValue(bound.receiver);
-                try self.markObj(&bound.method.obj);
+                try self.markValue(bound.method);
             },
             else => {},
         }
@@ -271,7 +272,7 @@ pub const Heap = struct {
 
         const class = try self.allocator.create(ObjClass);
         errdefer self.allocator.destroy(class);
-        const methods = std.AutoHashMap(*ObjStr, *ObjClosure).init(self.allocator);
+        const methods = std.AutoHashMap(*ObjStr, Value).init(self.allocator);
         errdefer methods.deinit();
 
         class.* = .{ .name = name, .methods = methods };
@@ -306,7 +307,7 @@ pub const Heap = struct {
 
     /// The receiver and the method must remain alive for the lifetime of the
     /// bound method.
-    pub fn createBoundMethod(self: *Heap, receiver: Value, method: *ObjClosure) !*ObjBoundMethod {
+    pub fn createBoundMethod(self: *Heap, receiver: Value, method: Value) !*ObjBoundMethod {
         try self.checkAndCollect();
 
         const bound = try self.allocator.create(ObjBoundMethod);
@@ -507,7 +508,7 @@ fn exerciseObjectAllocations(allocator: std.mem.Allocator) !void {
     const instance = try heap.createInstance(class);
     const fieldName = try heap.copyString("field");
     try instance.fields.put(fieldName, .{ .number = 42 });
-    const bound = try heap.createBoundMethod(.{ .instance = instance }, closure);
+    const bound = try heap.createBoundMethod(.{ .instance = instance }, .{ .closure = closure });
 
     try std.testing.expect(heap.objects == &bound.obj);
     try std.testing.expect(bound.obj.next == &fieldName.obj);
@@ -521,7 +522,7 @@ fn exerciseObjectAllocations(allocator: std.mem.Allocator) !void {
     try std.testing.expect(function.obj.next == &name.obj);
     try std.testing.expect(closure.upvalues[0].location == &local);
     try std.testing.expectEqual(@as(f64, 42), instance.fields.get(fieldName).?.number);
-    try std.testing.expect(bound.method == closure);
+    try std.testing.expect(bound.method.closure == closure);
     try std.testing.expect(bound.receiver.instance == instance);
 }
 
@@ -555,7 +556,7 @@ test "bound method keeps its receiver and method reachable" {
     const functionName = try heap.copyString("get");
     const function = try heap.createFunction(functionName);
     const closure = try heap.createClosure(function);
-    const bound = try heap.createBoundMethod(.{ .instance = instance }, closure);
+    const bound = try heap.createBoundMethod(.{ .instance = instance }, .{ .closure = closure });
 
     try heap.markObj(&bound.obj);
     try heap.traceReferences();

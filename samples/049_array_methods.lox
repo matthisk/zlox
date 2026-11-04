@@ -1,0 +1,18 @@
+var a = [1, 2];
+a.push(3);
+print a;
+
+var popped = a.pop();
+print popped;
+
+a.set(0, "first");
+print a.get(0);
+print a.len();
+
+// Methods can be read as bound methods, like methods on instances.
+var push = a.push;
+push(4);
+print a;
+
+var length = a.len();
+var first = a.get(0);

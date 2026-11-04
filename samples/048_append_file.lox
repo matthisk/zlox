@@ -1,0 +1,3 @@
+writeFile(".zig-cache/zlox_append_file_sample.txt", "Hello");
+appendFile(".zig-cache/zlox_append_file_sample.txt", " from");
+appendFile(".zig-cache/zlox_append_file_sample.txt", " Lox!");
