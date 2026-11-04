@@ -195,6 +195,11 @@ pub const Heap = struct {
             .class => {
                 const class: *ObjClass = @fieldParentPtr("obj", obj);
                 try self.markObj(&class.name.obj);
+                var it = class.methods.iterator();
+                while (it.next()) |entry| {
+                    try self.markObj(&entry.key_ptr.*.obj);
+                    try self.markObj(&entry.value_ptr.*.obj);
+                }
             },
             .instance => {
                 const instance: *ObjInstance = @fieldParentPtr("obj", obj);
