@@ -717,6 +717,12 @@ pub const VM = struct {
         if (!value.isInstance(receiver)) {
             return .not_callable;
         }
+
+        if (receiver.instance.fields.get(name)) |f| {
+            self.stack.values[self.stack.len - argCount - 1] = f;
+            return try self.callValue(f, argCount);
+        }
+
         return self.invokeFromClass(receiver.instance.class, name, argCount);
     }
 
