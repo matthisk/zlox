@@ -7,3 +7,4 @@ class Scone {
 var scone = Scone();
 scone.name = "Jummy";
 scone.topping("berries", "cream");
+

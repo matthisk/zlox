@@ -108,6 +108,10 @@ const Upvalue = struct {
     isLocal: bool,
 };
 
+const ClassCompiler = struct {
+    enclosing: ?*const ClassCompiler = null,
+};
+
 const UINT8_COUNT = std.math.maxInt(u8) + 1;
 const UINT16_MAX = std.math.maxInt(u16);
 const DEBUG_COMPILER = config.debug_compiler;
@@ -128,6 +132,7 @@ pub const Compiler = struct {
     scopeDepth: usize = 0,
     loopStartStack: std.ArrayList(usize) = undefined,
     enclosing: ?*Compiler = null,
+    currentClass: ?*const ClassCompiler = null,
     upvalues: [UINT8_COUNT]Upvalue = .{Upvalue{ .index = 0, .isLocal = false }} ** UINT8_COUNT,
 
     pub fn init(io: std.Io, allocator: std.mem.Allocator, scanner: *Scanner, vm: *VM, enclosing: ?*Compiler, fnType: FunctionType) !Compiler {
@@ -138,6 +143,7 @@ pub const Compiler = struct {
             compiler.enclosing = enclosing.?;
             compiler.current = enclosing.?.current;
             compiler.previous = enclosing.?.previous;
+            compiler.currentClass = enclosing.?.currentClass;
         }
 
         const name = if (fnType != FunctionType.SCRIPT)
@@ -272,6 +278,9 @@ pub const Compiler = struct {
 
         self.consume(TokenType.TOKEN_LEFT_BRACE, "Expect '{' before class body.");
 
+        self.currentClass = &ClassCompiler{ .enclosing = self.currentClass };
+        defer self.currentClass = self.currentClass.?.enclosing;
+
         while (!self.check(TokenType.TOKEN_RIGHT_BRACE) and !self.check(TokenType.TOKEN_EOF)) {
             try self.method();
         }
@@ -296,7 +305,13 @@ pub const Compiler = struct {
     fn function(self: *Compiler, fType: FunctionType) !void {
         var inner = try Compiler.init(self.io, self.allocator, self.scanner, self.vm, self, fType);
         try inner._function();
-        try self.emitConstantOperand(OpCode.OP_CLOSURE, OpCode.OP_CLOSURE_LONG, try self.makeConstant(.{ .function = inner.endCompiler() }));
+        const functionObject = inner.endCompiler();
+        try self.emitConstantOperand(OpCode.OP_CLOSURE, OpCode.OP_CLOSURE_LONG, try self.makeConstant(.{ .function = functionObject }));
+        // Each captured variable is encoded after OP_CLOSURE as an isLocal byte and a u24 index.
+        for (0..functionObject.upvalueCount) |i| {
+            try self.emitByte(if (inner.upvalues[i].isLocal) 1 else 0);
+            try self.emitMedium(inner.upvalues[i].index);
+        }
     }
 
     fn _function(self: *Compiler) !void {
@@ -335,6 +350,7 @@ pub const Compiler = struct {
         if (self.enclosing != null) {
             self.enclosing.?.current = self.current;
             self.enclosing.?.previous = self.previous;
+            self.enclosing.?.hadError = self.hadError;
         }
         return self.functionObject;
     }
@@ -712,6 +728,10 @@ pub const Compiler = struct {
     }
 
     fn this(self: *Compiler, _: bool) !void {
+        if (self.currentClass == null) {
+            self.errorAtCurrent("Can't use 'this' outside of a class.");
+            return;
+        }
         try self.variable(false);
     }
 

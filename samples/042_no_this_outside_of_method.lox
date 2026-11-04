@@ -1,0 +1,4 @@
+fun notMethod() {
+  print this.name + " is my name";
+}
+
