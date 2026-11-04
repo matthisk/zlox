@@ -336,3 +336,39 @@ test "039 write file" {
     defer std.testing.allocator.free(contents);
     try std.testing.expectEqualStrings("Hello from Lox!", contents);
 }
+
+test "047 floor" {
+    const source = try loadTestFile(std.testing.allocator, "047_floor.lox");
+    defer std.testing.allocator.free(source);
+
+    var scanner = Scanner.init(source.ptr);
+    var vm = try VM.init(std.testing.io, std.testing.allocator);
+    defer vm.deinit();
+    var compiler = try Compiler.init(std.testing.io, std.testing.allocator, &scanner, &vm, null, FunctionType.SCRIPT);
+    defer compiler.deinit();
+
+    const function = try compiler.compile();
+    try std.testing.expectEqual(null, try vm.startScript(function));
+    try std.testing.expectEqual(InterpretResult.OK, try vm.run());
+
+    try std.testing.expectEqual(2, vm.getGlobal("positive").?.number);
+    try std.testing.expectEqual(-3, vm.getGlobal("negative").?.number);
+    try std.testing.expectEqual(5, vm.getGlobal("whole").?.number);
+}
+
+test "048 append file" {
+    const output_path = ".zig-cache/zlox_append_file_sample.txt";
+    defer std.Io.Dir.cwd().deleteFile(std.testing.io, output_path) catch {};
+
+    const result = try executeTestFile(std.testing.allocator, "048_append_file.lox");
+    try std.testing.expectEqual(InterpretResult.OK, result);
+
+    const contents = try std.Io.Dir.cwd().readFileAlloc(
+        std.testing.io,
+        output_path,
+        std.testing.allocator,
+        .limited(1024),
+    );
+    defer std.testing.allocator.free(contents);
+    try std.testing.expectEqualStrings("Hello from Lox!", contents);
+}

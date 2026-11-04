@@ -148,9 +148,11 @@ pub const VM = struct {
         try vm.defineNative("clock", 0, clockNative);
         try vm.defineNative("random", 0, randomNative);
         try vm.defineNative("sqrt", 1, sqrtNative);
+        try vm.defineNative("floor", 1, floorNative);
         try vm.defineNative("str", 1, strNative);
         try vm.defineNative("readLine", 0, readLineNative);
         try vm.defineNative("writeFile", 2, writeFileNative);
+        try vm.defineNative("appendFile", 2, appendFileNative);
 
         return vm;
     }
@@ -847,6 +849,22 @@ pub fn writeFileNative(vm: *VM, argCount: usize, args: []const Value) !Value {
     return value.nilValue();
 }
 
+pub fn appendFileNative(vm: *VM, argCount: usize, args: []const Value) !Value {
+    if (argCount != 2) {
+        return Errors.RuntimeError;
+    }
+    if (!value.isString(args[0]) or !value.isString(args[1])) {
+        return Errors.RuntimeError;
+    }
+
+    // std.Io has no append mode, so open without truncating and write at the end.
+    const file = try std.Io.Dir.cwd().createFile(vm.io, args[0].string.chars, .{ .truncate = false });
+    defer file.close(vm.io);
+    try file.writePositionalAll(vm.io, args[1].string.chars, try file.length(vm.io));
+
+    return value.nilValue();
+}
+
 pub fn strNative(vm: *VM, argCount: usize, args: []const Value) !Value {
     if (argCount != 1) {
         return Errors.RuntimeError;
@@ -877,6 +895,16 @@ pub fn sqrtNative(_: *VM, argCount: usize, args: []const Value) !Value {
         return Errors.RuntimeError;
     }
     return value.numberValue(std.math.sqrt(args[0].number));
+}
+
+pub fn floorNative(_: *VM, argCount: usize, args: []const Value) !Value {
+    if (argCount != 1) {
+        return Errors.RuntimeError;
+    }
+    if (!value.isNumber(args[0])) {
+        return Errors.RuntimeError;
+    }
+    return value.numberValue(@floor(args[0].number));
 }
 
 pub fn clockNative(vm: *VM, _: usize, _: []const Value) !Value {
