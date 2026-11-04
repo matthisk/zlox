@@ -90,6 +90,7 @@ pub fn build(b: *std.Build) void {
     bench_options.addOption(bool, "debug_scanner", false);
     bench_options.addOption(bool, "debug_compiler", false);
     bench_options.addOption(bool, "debug_vm", false);
+    bench_options.addOption(bool, "debug_gc", false);
 
     const bench_zlox_mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),

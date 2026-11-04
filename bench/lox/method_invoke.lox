@@ -1,0 +1,20 @@
+// Repeated method calls on an instance: stresses OP_INVOKE (property lookup + call fused).
+class Counter {
+  init() {
+    this.count = 0;
+  }
+
+  add(n) {
+    this.count = this.count + n;
+  }
+}
+
+var start = clock();
+var counter = Counter();
+for (var j = 0; j < 2500; j = j + 1) {
+  for (var i = 0; i < 10000; i = i + 1) {
+    counter.add(i);
+  }
+}
+print counter.count;
+print clock() - start;

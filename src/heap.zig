@@ -93,6 +93,11 @@ pub const Heap = struct {
                 _ = self.strings.remove(string.chars);
             }
         }
+
+        // Removing entries leaves tombstones behind. Lookups for strings that
+        // are not interned yet must probe past them, so without a rehash every
+        // concatenation gets slower after each collection.
+        self.strings.rehash();
     }
 
     pub fn sweep(self: *Heap) void {
