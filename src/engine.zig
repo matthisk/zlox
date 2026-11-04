@@ -27,31 +27,31 @@ pub const Engine = struct {
         self.vm.deinit();
     }
 
-    pub fn execute(self: *Engine, source: []const u8) !void {
+    pub fn execute(self: *Engine, source: []const u8) !InterpretResult {
         var scanner = Scanner.init(source.ptr);
         var compiler = try Compiler.init(self.io, self.allocator, &scanner, &self.vm, null, FunctionType.SCRIPT);
         defer compiler.deinit();
 
         const functionObject = compiler.compile() catch |err| switch (err) {
             std.mem.Allocator.Error.OutOfMemory => {
-                std.debug.print("Not enough memory.", .{});
-                return;
+                std.debug.print("Not enough memory.\n", .{});
+                return .COMPILE_ERROR;
             },
             chunk_mod.ChunkErrors.OutOfConstantDataSlots => {
-                std.debug.print("Ran out of constant data slots (currently limited to 255).", .{});
-                return;
+                std.debug.print("Ran out of constant data slots (currently limited to 255).\n", .{});
+                return .COMPILE_ERROR;
             },
             else => {
-                std.debug.print("Compile error.", .{});
-                return;
+                std.debug.print("Compile error.\n", .{});
+                return .COMPILE_ERROR;
             },
         };
 
         if (try self.vm.startScript(functionObject)) |_| {
-            return;
+            return .RUNTIME_ERROR;
         }
 
-        _ = try self.vm.run();
+        return self.vm.run();
     }
 };
 

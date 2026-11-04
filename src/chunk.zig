@@ -249,8 +249,8 @@ pub const Chunk = struct {
     pub fn instructionLength(self: *const Chunk, offset: usize) usize {
         const op = std.enums.fromInt(OpCode, self.code.items[offset]) orelse return 1;
         return switch (op) {
-            .OP_CONSTANT, .OP_CALL, .OP_DEFINE_GLOBAL, .OP_GET_GLOBAL, .OP_SET_GLOBAL, .OP_ARRAY, .OP_CLASS, .OP_GET_PROPERTY, .OP_SET_PROPERTY, .OP_METHOD => 2,
-            .OP_ARRAY_LONG, .OP_CONSTANT_LONG, .OP_DEFINE_GLOBAL_LONG, .OP_GET_LOCAL, .OP_SET_LOCAL, .OP_GET_GLOBAL_LONG, .OP_SET_GLOBAL_LONG, .OP_GET_UPVALUE, .OP_SET_UPVALUE, .OP_CLASS_LONG, .OP_SET_PROPERTY_LONG, .OP_GET_PROPERTY_LONG, .OP_METHOD_LONG => 4,
+            .OP_CONSTANT, .OP_CALL, .OP_POPN, .OP_DEFINE_GLOBAL, .OP_GET_GLOBAL, .OP_SET_GLOBAL, .OP_ARRAY, .OP_CLASS, .OP_GET_PROPERTY, .OP_SET_PROPERTY, .OP_METHOD => 2,
+            .OP_ARRAY_LONG, .OP_POPN_LONG, .OP_CONSTANT_LONG, .OP_DEFINE_GLOBAL_LONG, .OP_GET_LOCAL, .OP_SET_LOCAL, .OP_GET_GLOBAL_LONG, .OP_SET_GLOBAL_LONG, .OP_GET_UPVALUE, .OP_SET_UPVALUE, .OP_CLASS_LONG, .OP_SET_PROPERTY_LONG, .OP_GET_PROPERTY_LONG, .OP_METHOD_LONG => 4,
             .OP_JUMP_IF_FALSE, .OP_JUMP, .OP_LOOP, .OP_INVOKE => 3,
             .OP_INVOKE_LONG => 5,
             .OP_CLOSURE, .OP_CLOSURE_LONG => {
@@ -266,6 +266,21 @@ pub const Chunk = struct {
         };
     }
 };
+
+test "instruction length includes POPN operands" {
+    var chunk = Chunk.init(std.testing.allocator);
+    defer chunk.deinit();
+
+    try chunk.writeChunk(@intFromEnum(OpCode.OP_POPN), 1);
+    try chunk.writeChunk(1, 1);
+    try chunk.writeChunk(@intFromEnum(OpCode.OP_POPN_LONG), 1);
+    try chunk.writeChunk(0, 1);
+    try chunk.writeChunk(1, 1);
+    try chunk.writeChunk(0, 1);
+
+    try std.testing.expectEqual(@as(usize, 2), chunk.instructionLength(0));
+    try std.testing.expectEqual(@as(usize, 4), chunk.instructionLength(2));
+}
 
 test "compressed line table resolves instruction offsets" {
     var chunk = Chunk.init(std.testing.allocator);

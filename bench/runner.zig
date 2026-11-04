@@ -68,7 +68,7 @@ pub fn main(init: std.process.Init) !void {
         };
 
         var samples: [measured_runs]Sample = undefined;
-        const ok = runBenchmark(io, init.gpa, zlox_path, lox_path, expected, &samples) catch |err| {
+        const ok = runBenchmark(io, init.gpa, out, name, zlox_path, lox_path, expected, &samples) catch |err| {
             try out.print("{s: <20} FAILED: {t}\n", .{ name, err });
             try out.flush();
             failures += 1;
@@ -132,11 +132,14 @@ fn matchesFilters(name: []const u8, filters: []const []const u8) bool {
 }
 
 /// Runs one benchmark `warmup_runs + measured_runs` times, filling `samples`
-/// with the measured runs. Returns false (after reporting) when the output
-/// does not match `expected`.
+/// with the measured runs. Returns false (after reporting a FAILED row on
+/// `out`) when the script fails to execute or its output does not match
+/// `expected`.
 fn runBenchmark(
     io: Io,
     gpa: std.mem.Allocator,
+    out: *Io.Writer,
+    name: []const u8,
     zlox_path: []const u8,
     lox_path: []const u8,
     expected: []const u8,
@@ -149,11 +152,6 @@ fn runBenchmark(
         defer gpa.free(result.stdout);
         defer gpa.free(result.stderr);
 
-        const exited_cleanly = switch (result.term) {
-            .exited => |code| code == 0,
-            else => false,
-        };
-
         // The last line is the self-reported time; everything before it is the result.
         const trimmed = std.mem.trimEnd(u8, result.stdout, "\n");
         const split = std.mem.lastIndexOfScalar(u8, trimmed, '\n');
@@ -161,11 +159,27 @@ fn runBenchmark(
         const vm_line = if (split) |i| trimmed[i + 1 ..] else trimmed;
         const vm_ms = std.fmt.parseFloat(f64, vm_line) catch null;
 
-        if (!exited_cleanly or result.stderr.len > 0 or vm_ms == null or !std.mem.eql(u8, output, expected)) {
-            std.debug.print(
-                "{s}: FAILED\n  term: {any}\n  expected:\n{s}  stdout:\n{s}\n  stderr:\n{s}\n",
-                .{ lox_path, result.term, expected, result.stdout, result.stderr },
+        // Check the most fundamental failure first so the reason is accurate.
+        const reason: ?[]const u8 = switch (result.term) {
+            .exited => |code| if (code != 0)
+                "script exited with an error"
+            else if (result.stderr.len > 0)
+                "script wrote to stderr"
+            else if (vm_ms == null)
+                "last line is not the elapsed time"
+            else if (!std.mem.eql(u8, output, expected))
+                "unexpected output"
+            else
+                null,
+            else => "script crashed",
+        };
+
+        if (reason) |r| {
+            try out.print(
+                "{s: <20} FAILED: {s} (run {d}, term: {any})\n  expected:\n{s}  stdout:\n{s}\n  stderr:\n{s}\n",
+                .{ name, r, run + 1, result.term, expected, result.stdout, result.stderr },
             );
+            try out.flush();
             return false;
         }
 

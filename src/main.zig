@@ -26,7 +26,7 @@ pub fn main(init: std.process.Init) !void {
         const file_path = args[1];
         const file = std.Io.Dir.cwd().openFile(init.io, file_path, .{}) catch |err| {
             std.debug.print("Error opening file '{s}': {}\n", .{ file_path, err });
-            return;
+            std.process.exit(74);
         };
         defer file.close(init.io);
 
@@ -37,9 +37,18 @@ pub fn main(init: std.process.Init) !void {
 
         defer allocator.free(source);
 
-        engine.execute(source) catch |err| {
+        // Exit codes follow Crafting Interpreters (sysexits.h): 65 for a
+        // compile error, 70 for a runtime error. This lets callers such as
+        // the benchmark runner detect a failed script.
+        const result = engine.execute(source) catch |err| {
             std.debug.print("Error: {}\n", .{err});
+            std.process.exit(70);
         };
+        switch (result) {
+            .OK => {},
+            .COMPILE_ERROR => std.process.exit(65),
+            .RUNTIME_ERROR => std.process.exit(70),
+        }
     } else {
         var buffer = std.ArrayList(u8).empty;
         defer buffer.deinit(allocator);
@@ -64,7 +73,7 @@ pub fn main(init: std.process.Init) !void {
             try buffer.appendSlice(allocator, line);
             try buffer.append(allocator, 0);
 
-            engine.execute(buffer.items) catch |err| {
+            _ = engine.execute(buffer.items) catch |err| {
                 std.debug.print("Error: {}\n", .{err});
             };
         }
