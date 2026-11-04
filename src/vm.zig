@@ -130,6 +130,7 @@ pub const VM = struct {
     frames: [FRAMES_MAX]CallFrame = undefined,
     frameCount: usize,
     openUpvalues: ?*ObjUpvalue = null,
+    initString: *ObjStr = undefined,
 
     pub fn init(io: std.Io, allocator: std.mem.Allocator) !VM {
         var vm = VM{
@@ -141,6 +142,7 @@ pub const VM = struct {
             .frameCount = 0,
         };
         vm.heap.garbageCollectionEnabled = true;
+        vm.initString = try vm.heap.copyString("init");
         errdefer vm.deinit();
 
         try vm.defineNative("clock", 0, clockNative);
@@ -699,6 +701,11 @@ pub const VM = struct {
                 // instance so it becomes slot 0 of the callee's frame.
                 const instance = try self.heap.createInstance(class);
                 self.stack.values[self.stack.len - argCount - 1] = .{ .instance = instance };
+                if (class.methods.get(self.initString)) |initMethod| {
+                    return try self.call(initMethod, argCount);
+                } else if (argCount != 0) {
+                    return .{ .expected_arguments = .{ .expected = 0, .actual = argCount } };
+                }
                 return null;
             },
             .bound_method => |method| {

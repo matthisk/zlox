@@ -71,6 +71,7 @@ pub const Heap = struct {
         }
 
         try self.markRoots(vm);
+        try self.markObj(&vm.initString.obj);
         try self.traceReferences();
         self.removeWhiteInternedStrings();
         self.sweep();

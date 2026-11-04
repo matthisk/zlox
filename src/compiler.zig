@@ -38,7 +38,7 @@ const ParseTrace = struct {
 
 const ParseTraceKind = enum { prefix, infix };
 
-pub const FunctionType = enum { FUNCTION, SCRIPT, METHOD };
+pub const FunctionType = enum { FUNCTION, SCRIPT, METHOD, INITIALIZER };
 
 const EmitTrace = struct {
     op: OpCode,
@@ -158,7 +158,7 @@ pub const Compiler = struct {
         compiler.locals = std.ArrayList(Local).empty;
         // The first slot in the locals stack is reserved for the VM.
         try compiler.locals.append(allocator, Local{
-            .name = if (fnType == .METHOD) "this" else "",
+            .name = if (fnType == .METHOD or fnType == .INITIALIZER) "this" else "",
             .depth = 0,
             .isCaptured = false,
         });
@@ -291,8 +291,9 @@ pub const Compiler = struct {
 
     fn method(self: *Compiler) !void {
         self.consume(TokenType.TOKEN_IDENTIFIER, "Expect method name.");
+        const fType = if (std.mem.eql(u8, self.previous.lexeme, "init")) FunctionType.INITIALIZER else FunctionType.METHOD;
         const name = try self.identifierConstant();
-        try self.function(FunctionType.METHOD);
+        try self.function(fType);
         try self.emitConstantOperand(OpCode.OP_METHOD, OpCode.OP_METHOD_LONG, name);
     }
 
@@ -395,6 +396,9 @@ pub const Compiler = struct {
         if (self.match(TokenType.TOKEN_SEMICOLON)) {
             try self.emitReturn();
         } else {
+            if (self.type == .INITIALIZER) {
+                self.errorAtCurrent("Can't return from class initializer.");
+            }
             try self.expression();
             self.consume(TokenType.TOKEN_SEMICOLON, "Expect ';' after value.");
             try self.emitOp(OpCode.OP_RETURN);
@@ -975,8 +979,13 @@ pub const Compiler = struct {
     }
 
     fn emitReturn(self: *Compiler) !void {
-        // We emit nil because that is the implicit return value in case this function doesn't return anything.
-        try self.emitOp(OpCode.OP_NIL);
+        if (self.type == .INITIALIZER) {
+            // We implicitly return the instance from a class initializer method.
+            try self.emitOpWithMediumOperand(OpCode.OP_GET_LOCAL, 0);
+        } else {
+            // We emit nil because that is the implicit return value in case this function doesn't return anything.
+            try self.emitOp(OpCode.OP_NIL);
+        }
         try self.emitOp(OpCode.OP_RETURN);
     }
 
