@@ -421,10 +421,13 @@ pub const VM = struct {
                     else
                         self.readLongConstant(&ip, constants);
 
-                    const v = self.stack.pop().?;
+                    // Leave the receiver on the stack: bindMethod needs it and
+                    // replaces it with the bound method itself.
+                    const v = self.peekStack(0);
                     if (value.isInstance(v)) {
                         const instance = v.instance;
                         if (instance.fields.get(name.string)) |val| {
+                            _ = self.stack.pop();
                             try self.stack.append(val);
                         } else if (try self.bindMethod(instance.class, name.string)) |err| {
                             return err;
@@ -692,7 +695,10 @@ pub const VM = struct {
     inline fn callValue(self: *VM, callee: Value, argCount: u8) !?RuntimeFault {
         switch (callee) {
             .class => |class| {
-                try self.stack.append(.{ .instance = try self.heap.createInstance(class) });
+                // The class sits below the arguments; replace it with the new
+                // instance so it becomes slot 0 of the callee's frame.
+                const instance = try self.heap.createInstance(class);
+                self.stack.values[self.stack.len - argCount - 1] = .{ .instance = instance };
                 return null;
             },
             .bound_method => |method| {
@@ -702,6 +708,9 @@ pub const VM = struct {
                         .actual = argCount,
                     } };
                 }
+                // Slot 0 of the new frame holds `this`, so overwrite the bound
+                // method with its receiver.
+                self.stack.values[self.stack.len - argCount - 1] = method.receiver;
                 return try self.call(method.method, argCount);
             },
             .closure => |closure| {

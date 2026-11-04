@@ -38,7 +38,7 @@ const ParseTrace = struct {
 
 const ParseTraceKind = enum { prefix, infix };
 
-pub const FunctionType = enum { FUNCTION, SCRIPT };
+pub const FunctionType = enum { FUNCTION, SCRIPT, METHOD };
 
 const EmitTrace = struct {
     op: OpCode,
@@ -152,7 +152,7 @@ pub const Compiler = struct {
         compiler.locals = std.ArrayList(Local).empty;
         // The first slot in the locals stack is reserved for the VM.
         try compiler.locals.append(allocator, Local{
-            .name = "",
+            .name = if (fnType == .METHOD) "this" else "",
             .depth = 0,
             .isCaptured = false,
         });
@@ -198,7 +198,7 @@ pub const Compiler = struct {
         compiler.rules.set(TokenType.TOKEN_PRINT, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
         compiler.rules.set(TokenType.TOKEN_RETURN, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
         compiler.rules.set(TokenType.TOKEN_SUPER, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
-        compiler.rules.set(TokenType.TOKEN_THIS, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
+        compiler.rules.set(TokenType.TOKEN_THIS, ParseRule{ .prefix = this, .infix = null, .precedence = Precedence.NONE });
         compiler.rules.set(TokenType.TOKEN_TRUE, ParseRule{ .prefix = literal, .infix = null, .precedence = Precedence.NONE });
         compiler.rules.set(TokenType.TOKEN_VAR, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
         compiler.rules.set(TokenType.TOKEN_WHILE, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
@@ -283,7 +283,7 @@ pub const Compiler = struct {
     fn method(self: *Compiler) !void {
         self.consume(TokenType.TOKEN_IDENTIFIER, "Expect method name.");
         const name = try self.identifierConstant();
-        try self.function(FunctionType.FUNCTION);
+        try self.function(FunctionType.METHOD);
         try self.emitConstantOperand(OpCode.OP_METHOD, OpCode.OP_METHOD_LONG, name);
     }
 
@@ -709,6 +709,10 @@ pub const Compiler = struct {
         const value = std.fmt.parseFloat(f64, self.previous.lexeme) catch unreachable;
 
         try self.emitConstant(numberValue(value));
+    }
+
+    fn this(self: *Compiler, _: bool) !void {
+        try self.variable(false);
     }
 
     fn literal(self: *Compiler, _: bool) !void {
