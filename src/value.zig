@@ -64,11 +64,22 @@ pub const ObjUpvalue = struct {
     next: ?*ObjUpvalue = null,
 };
 
+/// Tells OP_CLOSURE where to find one captured variable.
+pub const UpvalueDescriptor = struct {
+    /// true: `index` is a local slot in the enclosing function's frame.
+    /// false: `index` is an upvalue index in the enclosing closure.
+    isLocal: bool,
+    index: u24,
+};
+
 pub const ObjFunction = struct {
     obj: Obj = .{ .kind = .function },
     arity: usize,
     chunk: Chunk,
     upvalueCount: u8 = 0,
+    /// One descriptor per upvalue, filled in by the compiler once the function body
+    /// is compiled. These used to be encoded in the bytecode after OP_CLOSURE.
+    upvalues: []UpvalueDescriptor = &.{},
     name: *ObjStr = undefined,
 
     pub fn create(allocator: std.mem.Allocator) !*ObjFunction {
@@ -76,11 +87,13 @@ pub const ObjFunction = struct {
         objFn.obj = .{ .kind = .function };
         objFn.arity = 0;
         objFn.upvalueCount = 0;
+        objFn.upvalues = &.{};
         objFn.chunk = Chunk.init(allocator);
         return objFn;
     }
 
     pub fn destroy(self: *ObjFunction, allocator: std.mem.Allocator) void {
+        allocator.free(self.upvalues);
         self.chunk.deinit();
         allocator.destroy(self);
     }
@@ -155,8 +168,7 @@ pub const Obj = struct {
             },
             .function => {
                 const f: *ObjFunction = @fieldParentPtr("obj", self);
-                f.chunk.deinit();
-                allocator.destroy(f);
+                f.destroy(allocator);
             },
             .native => {
                 const n: *ObjNative = @fieldParentPtr("obj", self);

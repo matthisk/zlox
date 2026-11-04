@@ -79,14 +79,10 @@ pub const Chunk = struct {
                     try writer.print("{s} [{d}] {f} (args = {d})", .{ name, d.operand, value_mod.format(data[d.operand]), argCount });
                 },
                 .OP_CLOSURE => {
-                    const upvalueCount = value_mod.asFunction(data[d.operand]).upvalueCount;
-                    try writer.print("{s} [{d}]", .{ name, d.operand });
-                    // Upvalue descriptors start right after the opcode's operand byte.
-                    const descriptors = d.op_offset + 2;
-                    for (0..upvalueCount) |i| {
-                        const isLocal = code[descriptors + i * 4];
-                        const idx = std.mem.readInt(u24, code[descriptors + i * 4 + 1 ..][0..3], .big);
-                        try writer.print(" ~ upvalue {s} [{d}]", .{ if (isLocal == 1) "<local>" else "", idx });
+                    try writer.print("{s} [{d}] {f}", .{ name, d.operand, value_mod.format(data[d.operand]) });
+                    // The upvalue descriptors live on the function object, not in the bytecode.
+                    for (value_mod.asFunction(data[d.operand]).upvalues) |desc| {
+                        try writer.print(" ~ upvalue {s} [{d}]", .{ if (desc.isLocal) "<local>" else "", desc.index });
                     }
                 },
                 .OP_JUMP_IF_FALSE, .OP_JUMP, .OP_LOOP => {
@@ -249,8 +245,6 @@ pub const Chunk = struct {
         const prefix = d.op_offset - offset;
         const base: usize = switch (d.op) {
             .OP_JUMP_IF_FALSE, .OP_JUMP, .OP_LOOP, .OP_INVOKE => 3,
-            // Each upvalue descriptor is `isLocal: u8` + `index: u24`.
-            .OP_CLOSURE => 2 + value_mod.asFunction(self.data.items[d.operand]).upvalueCount * 4,
             else => if (hasOperand(d.op)) 2 else 1,
         };
         return prefix + base;

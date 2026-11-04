@@ -361,14 +361,11 @@ pub const VM = struct {
                         if (!initialized) _ = self.stack.pop();
                     }
 
-                    for (0..f.upvalueCount) |i| {
-                        const isLocal = self.readByte(&ip);
-                        const index = self.readMedium(&ip);
-
-                        const upvalue = if (isLocal == 1)
-                            try self.captureUpvalue(&self.stack.values[frame.slots + index])
+                    for (f.upvalues, 0..) |desc, i| {
+                        const upvalue = if (desc.isLocal)
+                            try self.captureUpvalue(&self.stack.values[frame.slots + desc.index])
                         else
-                            frame.closure.upvalues[i];
+                            frame.closure.upvalues[desc.index];
                         c.setUpvalue(i, upvalue);
                     }
                     initialized = true;
@@ -577,14 +574,6 @@ pub const VM = struct {
         const low = ip.*[1];
         ip.* += 2;
         return (@as(u16, high) << 8) | low;
-    }
-
-    inline fn readMedium(_: *VM, ip: *[*]u8) u24 {
-        const high = ip.*[0];
-        const mid = ip.*[1];
-        const low = ip.*[2];
-        ip.* += 3;
-        return (@as(u24, high) << 16) | (@as(u24, mid) << 8) | low;
     }
 
     /// Read an instruction's one-byte operand and fold in the high bytes collected

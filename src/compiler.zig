@@ -12,6 +12,7 @@ const Token = scanner_mod.Token;
 const Value = value_mod.Value;
 const numberValue = value_mod.numberValue;
 const ObjFunction = value_mod.ObjFunction;
+const UpvalueDescriptor = value_mod.UpvalueDescriptor;
 
 const Chunk = chunk_mod.Chunk;
 const OpCode = chunk_mod.OpCode;
@@ -103,11 +104,6 @@ const Local = struct {
     isCaptured: bool,
 };
 
-const Upvalue = struct {
-    index: u24,
-    isLocal: bool,
-};
-
 const ClassCompiler = struct {
     enclosing: ?*const ClassCompiler = null,
 };
@@ -133,7 +129,7 @@ pub const Compiler = struct {
     loopStartStack: std.ArrayList(usize) = undefined,
     enclosing: ?*Compiler = null,
     currentClass: ?*const ClassCompiler = null,
-    upvalues: [UINT8_COUNT]Upvalue = .{Upvalue{ .index = 0, .isLocal = false }} ** UINT8_COUNT,
+    upvalues: [UINT8_COUNT]UpvalueDescriptor = .{UpvalueDescriptor{ .index = 0, .isLocal = false }} ** UINT8_COUNT,
 
     pub fn init(io: std.Io, allocator: std.mem.Allocator, scanner: *Scanner, vm: *VM, enclosing: ?*Compiler, fnType: FunctionType) !Compiler {
         var compiler = Compiler{ .io = io, .allocator = allocator, .scanner = scanner, .vm = vm };
@@ -307,12 +303,11 @@ pub const Compiler = struct {
         var inner = try Compiler.init(self.io, self.allocator, self.scanner, self.vm, self, fType);
         try inner._function();
         const functionObject = inner.endCompiler();
+        // The upvalue descriptors live on the function object, not in the bytecode, so
+        // OP_CLOSURE is a plain opcode + operand instruction. The heap's allocator owns
+        // them, like the rest of the function, and `ObjFunction.destroy` frees them.
+        functionObject.upvalues = try self.vm.heap.allocator.dupe(UpvalueDescriptor, inner.upvalues[0..functionObject.upvalueCount]);
         try self.emitOpWithOperand(OpCode.OP_CLOSURE, try self.makeConstant(.{ .function = functionObject }));
-        // Each captured variable is encoded after OP_CLOSURE as an isLocal byte and a u24 index.
-        for (0..functionObject.upvalueCount) |i| {
-            try self.emitByte(if (inner.upvalues[i].isLocal) 1 else 0);
-            try self.emitMedium(inner.upvalues[i].index);
-        }
     }
 
     fn _function(self: *Compiler) !void {
@@ -994,20 +989,6 @@ pub const Compiler = struct {
         try self.emitOp(@enumFromInt(b2));
     }
 
-    fn emitMedium(self: *Compiler, n: u24) !void {
-        // TODO: If n < 255 we can immediately emit the byte.
-        var buffer: [3]u8 = undefined;
-        const bytes = try toBytes(n, &buffer);
-
-        try self.emitManyBytes(bytes);
-    }
-
-    fn emitManyBytes(self: *Compiler, bs: []const u8) !void {
-        for (bs) |b| {
-            try self.emitByte(b);
-        }
-    }
-
     fn emitLoop(self: *Compiler, loopStart: usize) !void {
         try self.emitOp(OpCode.OP_LOOP);
 
@@ -1128,11 +1109,6 @@ pub const Compiler = struct {
         return &self.currentFunction().chunk;
     }
 };
-
-fn toBytes(n: u24, buffer: *[3]u8) ![]const u8 {
-    std.mem.writeInt(u24, buffer, n, .big);
-    return buffer[0..];
-}
 
 fn nextPrecedence(precedence: Precedence) Precedence {
     return @enumFromInt(@intFromEnum(precedence) + 1);
