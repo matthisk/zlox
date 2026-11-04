@@ -401,6 +401,24 @@ pub const VM = struct {
                     code = frame.closure.function.chunk.code.items.ptr;
                     ip = frame.ip;
                 },
+                OpCode.OP_INVOKE, OpCode.OP_INVOKE_LONG => {
+                    const name = if (instruction == .OP_INVOKE)
+                        self.readConstant(&ip, constants)
+                    else
+                        self.readLongConstant(&ip, constants);
+                    const argCount = self.readByte(&ip);
+
+                    // Safe the caller's ip address.
+                    frame.ip = ip;
+
+                    if (try self.invoke(name.string, argCount)) |err| {
+                        return err;
+                    }
+                    frame = &self.frames[self.frameCount - 1];
+                    constants = frame.closure.function.chunk.data.items;
+                    code = frame.closure.function.chunk.code.items.ptr;
+                    ip = frame.ip;
+                },
                 OpCode.OP_CLASS, OpCode.OP_CLASS_LONG => {
                     const name = if (instruction == .OP_CLASS)
                         self.readConstant(&ip, constants)
@@ -692,6 +710,22 @@ pub const VM = struct {
                 return true;
             },
         };
+    }
+
+    inline fn invoke(self: *VM, name: *ObjStr, argCount: u8) !?RuntimeFault {
+        const receiver = self.peekStack(argCount);
+        if (!value.isInstance(receiver)) {
+            return .not_callable;
+        }
+        return self.invokeFromClass(receiver.instance.class, name, argCount);
+    }
+
+    inline fn invokeFromClass(self: *VM, receiver: *ObjClass, name: *ObjStr, argCount: u8) !?RuntimeFault {
+        if (receiver.methods.get(name)) |m| {
+            return try self.callValue(.{ .closure = m }, argCount);
+        } else {
+            return .{ .unknown_property = .{ .name = name.chars } };
+        }
     }
 
     inline fn callValue(self: *VM, callee: Value, argCount: u8) !?RuntimeFault {

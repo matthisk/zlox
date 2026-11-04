@@ -861,6 +861,10 @@ pub const Compiler = struct {
         if (canAssign and self.match(TokenType.TOKEN_EQUAL)) {
             try self.expression();
             try self.emitConstantOperand(OpCode.OP_SET_PROPERTY, OpCode.OP_SET_PROPERTY_LONG, name);
+        } else if (self.match(TokenType.TOKEN_LEFT_PAREN)) {
+            const argCount = try self.argumentList();
+            try self.emitConstantOperand(OpCode.OP_INVOKE, OpCode.OP_INVOKE_LONG, name);
+            try self.emitByte(argCount);
         } else {
             try self.emitConstantOperand(OpCode.OP_GET_PROPERTY, OpCode.OP_GET_PROPERTY_LONG, name);
         }

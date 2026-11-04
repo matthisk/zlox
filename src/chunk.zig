@@ -33,6 +33,8 @@ pub const OpCode = enum(u8) {
     OP_GREATER,
     OP_PRINT,
     OP_CALL,
+    OP_INVOKE,
+    OP_INVOKE_LONG,
     OP_CLOSURE,
     OP_CLOSURE_LONG,
     OP_POP,
@@ -96,6 +98,18 @@ pub const Chunk = struct {
                     const bytes = self.chunk.code.items[self.offset + 1 ..][0..3];
                     const index = std.mem.readInt(u24, bytes, .big);
                     try writer.print("{s} [{d}]", .{ name, index });
+                },
+                .OP_INVOKE, .OP_INVOKE_LONG => {
+                    const index = if (op == .OP_INVOKE)
+                        self.chunk.code.items[self.offset + 1]
+                    else
+                        std.mem.readInt(u24, self.chunk.code.items[self.offset + 1 ..][0..3], .big);
+                    const argCount = if (op == .OP_INVOKE)
+                        self.chunk.code.items[self.offset + 2]
+                    else
+                        self.chunk.code.items[self.offset + 4];
+                    const methodName = self.chunk.data.items[index];
+                    try writer.print("{s} [{d}] {f} (args = {d})", .{ name, index, value_mod.format(methodName), argCount });
                 },
                 .OP_CLOSURE, .OP_CLOSURE_LONG => {
                     const operandLength: usize = if (op == .OP_CLOSURE) 1 else 3;
@@ -237,7 +251,8 @@ pub const Chunk = struct {
         return switch (op) {
             .OP_CONSTANT, .OP_CALL, .OP_DEFINE_GLOBAL, .OP_GET_GLOBAL, .OP_SET_GLOBAL, .OP_ARRAY, .OP_CLASS, .OP_GET_PROPERTY, .OP_SET_PROPERTY, .OP_METHOD => 2,
             .OP_ARRAY_LONG, .OP_CONSTANT_LONG, .OP_DEFINE_GLOBAL_LONG, .OP_GET_LOCAL, .OP_SET_LOCAL, .OP_GET_GLOBAL_LONG, .OP_SET_GLOBAL_LONG, .OP_GET_UPVALUE, .OP_SET_UPVALUE, .OP_CLASS_LONG, .OP_SET_PROPERTY_LONG, .OP_GET_PROPERTY_LONG, .OP_METHOD_LONG => 4,
-            .OP_JUMP_IF_FALSE, .OP_JUMP, .OP_LOOP => 3,
+            .OP_JUMP_IF_FALSE, .OP_JUMP, .OP_LOOP, .OP_INVOKE => 3,
+            .OP_INVOKE_LONG => 5,
             .OP_CLOSURE, .OP_CLOSURE_LONG => {
                 const operandLength: usize = if (op == .OP_CLOSURE) 1 else 3;
                 const idx = if (op == .OP_CLOSURE)
