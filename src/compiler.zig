@@ -109,6 +109,12 @@ const ClassCompiler = struct {
     hasSuper: bool = false,
 };
 
+const LoopStart = struct {
+    scopeDepth: usize = 0,
+    loopStart: usize = 0,
+    localCount: usize = 0,
+};
+
 const UINT8_COUNT = std.math.maxInt(u8) + 1;
 const UINT16_MAX = std.math.maxInt(u16);
 const DEBUG_COMPILER = config.debug_compiler;
@@ -127,7 +133,7 @@ pub const Compiler = struct {
     type: FunctionType = undefined,
     locals: std.ArrayList(Local) = undefined,
     scopeDepth: usize = 0,
-    loopStartStack: std.ArrayList(usize) = undefined,
+    loopStartStack: std.ArrayList(LoopStart) = .empty,
     enclosing: ?*Compiler = null,
     currentClass: ?*ClassCompiler = null,
     upvalues: [UINT8_COUNT]UpvalueDescriptor = .{UpvalueDescriptor{ .index = 0, .isLocal = false }} ** UINT8_COUNT,
@@ -159,7 +165,6 @@ pub const Compiler = struct {
             .depth = 0,
             .isCaptured = false,
         });
-        compiler.loopStartStack = std.ArrayList(usize).empty;
 
         compiler.rules = ParseRules.initUndefined();
 
@@ -368,7 +373,7 @@ pub const Compiler = struct {
         if (self.enclosing != null) {
             self.enclosing.?.current = self.current;
             self.enclosing.?.previous = self.previous;
-            self.enclosing.?.hadError = self.hadError;
+            self.enclosing.?.hadError = self.enclosing.?.hadError or self.hadError;
         }
         return self.functionObject;
     }
@@ -401,7 +406,11 @@ pub const Compiler = struct {
         if (self.loopStartStack.items.len == 0) {
             self.errorAtCurrent("Continue cannot be used outside of loop.");
         } else {
-            try self.emitLoop(self.loopStartStack.getLast());
+            const loopStart = self.loopStartStack.getLast();
+
+            try self.cleanLocalsFromStack(self.loopStartStack.getLast().scopeDepth, true);
+
+            try self.emitLoop(loopStart.loopStart);
         }
         self.consume(TokenType.TOKEN_SEMICOLON, "Expect ';' after value.");
     }
@@ -429,25 +438,30 @@ pub const Compiler = struct {
     fn endScope(self: *Compiler) !void {
         self.scopeDepth -= 1;
 
-        // Pop all variables from this scope, as they are no longer available after scope end.
+        try self.cleanLocalsFromStack(self.scopeDepth, false);
+    }
+
+    fn cleanLocalsFromStack(self: *Compiler, afterDepth: usize, retainLocals: bool) !void {
         var scopeStart = self.locals.items.len;
-        var hasCaptured = false;
-        while (scopeStart > 0 and self.locals.items[scopeStart - 1].depth > self.scopeDepth) {
+
+        while (self.locals.items[scopeStart - 1].depth > afterDepth) {
             scopeStart -= 1;
-            hasCaptured = hasCaptured or self.locals.items[scopeStart].isCaptured;
         }
 
-        const n = self.locals.items.len - scopeStart;
-        if (hasCaptured) {
-            // Close captured locals in stack order before their slots are discarded.
-            while (self.locals.items.len > scopeStart) {
-                const local = self.locals.pop().?;
-                try self.emitOp(if (local.isCaptured) OpCode.OP_CLOSE_UPVALUE else OpCode.OP_POP);
+        var n: u32 = 0;
+        for (scopeStart..self.locals.items.len) |i| {
+            const local = if (retainLocals) self.locals.items[i] else self.locals.pop().?;
+
+            if (local.isCaptured) {
+                if (n == 1) try self.emitOp(OpCode.OP_POP) else if (n > 1) try self.emitOpWithOperand(OpCode.OP_POPN, n);
+                try self.emitOp(OpCode.OP_CLOSE_UPVALUE);
+                n = 0;
+            } else {
+                n += 1;
             }
-        } else if (n > 0) {
-            try self.emitOpWithOperand(OpCode.OP_POPN, @intCast(n));
-            self.locals.shrinkRetainingCapacity(scopeStart);
         }
+
+        if (n == 1) try self.emitOp(OpCode.OP_POP) else if (n > 1) try self.emitOpWithOperand(OpCode.OP_POPN, n);
     }
 
     fn block(self: *Compiler) !void {
@@ -465,18 +479,18 @@ pub const Compiler = struct {
         if (self.match(TokenType.TOKEN_SEMICOLON)) {
             // no initializer
         } else if (self.match(TokenType.TOKEN_VAR)) {
-            try self.varDecl();
+            try self.varDecl(); // initializer
         } else {
             try self.expressionStatement();
         }
 
         var loopStart = self.currentChunk().code.items.len;
-        try self.loopStartStack.append(self.allocator, loopStart);
+        try self.loopStartStack.append(self.allocator, .{ .loopStart = loopStart, .scopeDepth = self.scopeDepth, .localCount = self.locals.items.len });
         defer _ = self.loopStartStack.pop();
 
         var exitJump: ?usize = null;
         if (!self.match(TokenType.TOKEN_SEMICOLON)) {
-            try self.expression();
+            try self.expression(); // condition
             self.consume(TokenType.TOKEN_SEMICOLON, "Expect ';'.");
 
             exitJump = try self.emitJump(OpCode.OP_JUMP_IF_FALSE);
@@ -487,12 +501,13 @@ pub const Compiler = struct {
             const bodyJump = try self.emitJump(OpCode.OP_JUMP);
             const incrementStart = self.currentChunk().code.items.len;
 
-            try self.expression();
+            try self.expression(); // increment
             try self.emitOp(OpCode.OP_POP);
             self.consume(TokenType.TOKEN_RIGHT_PAREN, "Expect ')' after for clauses.");
 
             try self.emitLoop(loopStart);
             loopStart = incrementStart;
+            self.loopStartStack.items[self.loopStartStack.items.len - 1].loopStart = incrementStart;
             try self.patchJump(bodyJump);
         }
 
@@ -509,7 +524,8 @@ pub const Compiler = struct {
 
     fn whileStatement(self: *Compiler) !void {
         const loopStart = self.currentChunk().code.items.len;
-        try self.loopStartStack.append(self.allocator, loopStart);
+        try self.loopStartStack.append(self.allocator, .{ .loopStart = loopStart, .scopeDepth = self.scopeDepth, .localCount = self.locals.items.len });
+        defer _ = self.loopStartStack.pop();
 
         self.consume(TokenType.TOKEN_LEFT_PAREN, "Expect '(' after while.");
         try self.expression();
@@ -523,8 +539,6 @@ pub const Compiler = struct {
 
         try self.patchJump(exitJump);
         try self.emitOp(OpCode.OP_POP);
-
-        _ = self.loopStartStack.pop();
     }
 
     fn ifStatement(self: *Compiler) !void {
