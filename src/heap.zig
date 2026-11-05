@@ -255,7 +255,10 @@ pub const Heap = struct {
         try self.checkAndCollect();
 
         const array = try self.allocator.create(ObjArray);
+        errdefer self.allocator.destroy(array);
         array.* = .{};
+        try array.values.ensureTotalCapacity(self.allocator, len);
+        errdefer array.values.deinit(self.allocator);
 
         self.register(&array.obj);
 

@@ -700,9 +700,15 @@ pub const VM = struct {
 
         try self.heap.checkAndCollect();
 
-        try a.values.appendSlice(self.allocator, b.values.items);
+        const combined = try self.heap.createArray(a.values.items.len + b.values.items.len);
+
+        try combined.values.appendSlice(self.heap.allocator, a.values.items);
+        try combined.values.appendSlice(self.heap.allocator, b.values.items);
 
         _ = self.stack.pop();
+        _ = self.stack.pop();
+
+        try self.stack.append(.{ .array = combined });
     }
 
     fn valuesEqual(self: *VM, a: Value, b: Value) bool {
