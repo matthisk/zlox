@@ -861,7 +861,8 @@ pub const Compiler = struct {
     fn addUpvalue(self: *Compiler, index: u24, isLocal: bool) !u8 {
         const upvalueCount = self.functionObject.upvalueCount;
 
-        if (upvalueCount >= UINT8_COUNT) {
+        if (upvalueCount == UINT8_COUNT) {
+            self.errorAtCurrent("Too many upvalues in closure.");
             return CompilerError.TooManyUpvalues;
         }
 
