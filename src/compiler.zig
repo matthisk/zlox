@@ -100,7 +100,7 @@ const ParseRules = std.EnumArray(TokenType, ParseRule);
 
 const Local = struct {
     name: []const u8,
-    depth: usize,
+    depth: ?usize,
     isCaptured: bool,
 };
 
@@ -444,7 +444,7 @@ pub const Compiler = struct {
     fn cleanLocalsFromStack(self: *Compiler, afterDepth: usize, retainLocals: bool) !void {
         var scopeStart = self.locals.items.len;
 
-        while (self.locals.items[scopeStart - 1].depth > afterDepth) {
+        while (self.locals.items[scopeStart - 1].depth.? > afterDepth) {
             scopeStart -= 1;
         }
 
@@ -657,18 +657,18 @@ pub const Compiler = struct {
             var i = self.locals.items.len;
             while (i > 0) : (i -= 1) {
                 const local = self.locals.items[i - 1];
-                if (local.depth != -1 and local.depth < self.scopeDepth) {
+                if (local.depth != null and local.depth.? < self.scopeDepth) {
                     break;
                 }
 
-                if (std.mem.eql(u8, local.name, name)) {
+                if (identifiersEqual(local.name, name)) {
                     self.errorAtCurrent("Already a variable with this name in this scope");
                 }
             }
         }
 
         self.traceLocal(name, self.locals.items.len);
-        try self.locals.append(self.allocator, Local{ .name = name, .depth = self.scopeDepth, .isCaptured = false });
+        try self.locals.append(self.allocator, Local{ .name = name, .depth = null, .isCaptured = false });
     }
 
     fn identifierConstant(self: *Compiler) !u32 {
@@ -683,6 +683,7 @@ pub const Compiler = struct {
 
     fn defineVariable(self: *Compiler, global: u32) !void {
         if (self.scopeDepth > 0) {
+            self.locals.items[self.locals.items.len - 1].depth = self.scopeDepth;
             return;
         }
         try self.emitOpWithOperand(.OP_DEFINE_GLOBAL, global);
@@ -831,7 +832,10 @@ pub const Compiler = struct {
         if (self.locals.items.len == 0) return null;
         var i = self.locals.items.len;
         while (i > 0) : (i -= 1) {
-            if (std.mem.eql(u8, self.locals.items[i - 1].name, name)) {
+            if (identifiersEqual(self.locals.items[i - 1].name, name)) {
+                if (self.locals.items[i - 1].depth == null) {
+                    self.errorAtCurrent("Can't read a local variable in its own initializer.");
+                }
                 return @intCast(i - 1);
             }
         }
