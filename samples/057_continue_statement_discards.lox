@@ -1,0 +1,8 @@
+
+fun f() {
+  var i = 0;
+  while (i < 3) { var x = "local"; i = i + 1; continue; }
+  var after = "after";
+  print after;
+}
+f();

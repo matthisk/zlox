@@ -1,0 +1,3 @@
+{ var a = "outer"; { var a = a; print a; } }
+fun g() { var b = b; print b; }
+g();
