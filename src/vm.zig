@@ -1204,7 +1204,7 @@ inline fn isTruthy(v: Value) bool {
         .bool => v.bool,
         .number => false,
         .nil => false,
-        .string, .function, .native, .closure, .class, .instance, .bound_method => false,
+        .string, .function, .native, .closure, .class, .instance, .bound_method => true,
         .array => v.array.values.items.len > 0,
     };
 }
@@ -1214,7 +1214,7 @@ inline fn isFalsey(v: Value) bool {
         .bool => !v.bool,
         .number => false,
         .nil => true,
-        .string, .function, .native, .closure, .class, .instance, .bound_method => true,
+        .string, .function, .native, .closure, .class, .instance, .bound_method => false,
         .array => v.array.values.items.len == 0,
     };
 }
