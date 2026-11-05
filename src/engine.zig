@@ -437,3 +437,23 @@ test "054 keyword prefixed identifiers" {
         try std.testing.expectEqual(true, result.bool);
     }
 }
+
+test "055 super methods" {
+    const source = try loadTestFile(std.testing.allocator, "055_super_methods.lox");
+    defer std.testing.allocator.free(source);
+
+    var scanner = Scanner.init(source.ptr);
+    var vm = try VM.init(std.testing.io, std.testing.allocator);
+    defer vm.deinit();
+    var compiler = try Compiler.init(std.testing.io, std.testing.allocator, &scanner, &vm, null, FunctionType.SCRIPT);
+    defer compiler.deinit();
+
+    const function = try compiler.compile();
+    try std.testing.expectEqual(null, try vm.startScript(function));
+    try std.testing.expectEqual(InterpretResult.OK, try vm.run());
+
+    for ([_][]const u8{ "dogSpeaks", "puppySpeaks", "inheritedInit", "boundSuper", "closureSuper" }) |name| {
+        const result = vm.getGlobal(name) orelse return error.MissingGlobal;
+        try std.testing.expectEqual(true, result.bool);
+    }
+}

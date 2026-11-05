@@ -33,6 +33,7 @@ const RuntimeFault = union(enum) {
     operand_must_be_number,
     operands_must_be_numbers,
     operands_must_be_numbers_or_strings,
+    super_class_must_be_class,
     undefined_variable: []const u8,
     expected_arguments: struct {
         expected: usize,
@@ -49,6 +50,7 @@ const RuntimeFault = union(enum) {
             .operand_must_be_number => try writer.writeAll("Operand must be a number."),
             .operands_must_be_numbers => try writer.writeAll("Operands must be numbers."),
             .operands_must_be_numbers_or_strings => try writer.writeAll("Operands must be two numbers or two strings."),
+            .super_class_must_be_class => try writer.writeAll("Superclass must be a class."),
             .undefined_variable => |name| try writer.print("Undefined variable '{s}'", .{name}),
             .expected_arguments => |arguments| try writer.print(
                 "Expected {d} arguments but got {d}",
@@ -424,15 +426,53 @@ pub const VM = struct {
                     code = frame.closure.function.chunk.code.items.ptr;
                     ip = frame.ip;
                 },
+                OpCode.OP_SUPER_INVOKE => {
+                    const name = self.readConstant(&ip, &extra, constants).string;
+                    const argCount = self.readByte(&ip);
+                    const super = self.stack.pop().?.class;
+
+                    frame.ip = ip;
+
+                    if (try self.invokeFromClass(super, name, argCount)) |err| {
+                        return err;
+                    }
+                    frame = &self.frames[self.frameCount - 1];
+                    constants = frame.closure.function.chunk.data.items;
+                    code = frame.closure.function.chunk.code.items.ptr;
+                    ip = frame.ip;
+                },
                 OpCode.OP_CLASS => {
                     const name = self.readConstant(&ip, &extra, constants);
 
                     try self.stack.append(.{ .class = try self.heap.createClass(name.string) });
                 },
+                OpCode.OP_INHERIT => {
+                    const superClass = self.peekStack(1);
+                    const class = self.peekStack(0).class;
+
+                    if (!value.isClass(superClass)) {
+                        return .super_class_must_be_class;
+                    }
+
+                    var it = superClass.class.methods.iterator();
+                    while (it.next()) |entry| {
+                        try class.methods.put(entry.key_ptr.*, entry.value_ptr.*);
+                    }
+                    // Subclass. Keep the super on the stack, it is a local or upvalue referenced by children scopes.
+                    _ = self.stack.pop();
+                },
                 OpCode.OP_METHOD => {
                     const name = self.readConstant(&ip, &extra, constants);
 
                     try self.defineMethod(name.string);
+                },
+                OpCode.OP_GET_SUPER => {
+                    const name = self.readConstant(&ip, &extra, constants).string;
+                    const super = self.stack.pop().?.class;
+
+                    if (try self.bindMethod(super, name)) |err| {
+                        return err;
+                    }
                 },
                 OpCode.OP_GET_PROPERTY => {
                     const name = self.readConstant(&ip, &extra, constants);

@@ -105,7 +105,8 @@ const Local = struct {
 };
 
 const ClassCompiler = struct {
-    enclosing: ?*const ClassCompiler = null,
+    enclosing: ?*ClassCompiler = null,
+    hasSuper: bool = false,
 };
 
 const UINT8_COUNT = std.math.maxInt(u8) + 1;
@@ -128,7 +129,7 @@ pub const Compiler = struct {
     scopeDepth: usize = 0,
     loopStartStack: std.ArrayList(usize) = undefined,
     enclosing: ?*Compiler = null,
-    currentClass: ?*const ClassCompiler = null,
+    currentClass: ?*ClassCompiler = null,
     upvalues: [UINT8_COUNT]UpvalueDescriptor = .{UpvalueDescriptor{ .index = 0, .isLocal = false }} ** UINT8_COUNT,
 
     pub fn init(io: std.Io, allocator: std.mem.Allocator, scanner: *Scanner, vm: *VM, enclosing: ?*Compiler, fnType: FunctionType) !Compiler {
@@ -199,7 +200,7 @@ pub const Compiler = struct {
         compiler.rules.set(TokenType.TOKEN_OR, ParseRule{ .prefix = null, .infix = or_, .precedence = Precedence.OR });
         compiler.rules.set(TokenType.TOKEN_PRINT, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
         compiler.rules.set(TokenType.TOKEN_RETURN, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
-        compiler.rules.set(TokenType.TOKEN_SUPER, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
+        compiler.rules.set(TokenType.TOKEN_SUPER, ParseRule{ .prefix = _super, .infix = null, .precedence = Precedence.NONE });
         compiler.rules.set(TokenType.TOKEN_THIS, ParseRule{ .prefix = this, .infix = null, .precedence = Precedence.NONE });
         compiler.rules.set(TokenType.TOKEN_TRUE, ParseRule{ .prefix = literal, .infix = null, .precedence = Precedence.NONE });
         compiler.rules.set(TokenType.TOKEN_VAR, ParseRule{ .prefix = null, .infix = null, .precedence = Precedence.NONE });
@@ -270,12 +271,29 @@ pub const Compiler = struct {
         try self.emitOpWithOperand(OpCode.OP_CLASS, idx);
         try self.defineVariable(idx);
 
+        var classCompiler = ClassCompiler{ .enclosing = self.currentClass, .hasSuper = false };
+        self.currentClass = &classCompiler;
+        defer self.currentClass = self.currentClass.?.enclosing;
+
+        if (self.match(TokenType.TOKEN_LESS)) {
+            self.consume(TokenType.TOKEN_IDENTIFIER, "Expect super class name.");
+            try self.variable(false);
+
+            if (identifiersEqual(className.lexeme, self.previous.lexeme)) {
+                self.errorAtCurrent("A class can't inherit from itself");
+            }
+
+            self.beginScope();
+            try self.addLocal("super");
+            self.currentClass.?.hasSuper = true;
+
+            try self.namedVariable(false, className.lexeme);
+            try self.emitOp(OpCode.OP_INHERIT);
+        }
+
         try self.namedVariable(false, className.lexeme);
 
         self.consume(TokenType.TOKEN_LEFT_BRACE, "Expect '{' before class body.");
-
-        self.currentClass = &ClassCompiler{ .enclosing = self.currentClass };
-        defer self.currentClass = self.currentClass.?.enclosing;
 
         while (!self.check(TokenType.TOKEN_RIGHT_BRACE) and !self.check(TokenType.TOKEN_EOF)) {
             try self.method();
@@ -283,6 +301,10 @@ pub const Compiler = struct {
         self.consume(TokenType.TOKEN_RIGHT_BRACE, "Expect '}' after class body.");
 
         try self.emitOp(OpCode.OP_POP);
+
+        if (self.currentClass.?.hasSuper) {
+            try self.endScope();
+        }
     }
 
     fn method(self: *Compiler) !void {
@@ -718,6 +740,30 @@ pub const Compiler = struct {
         try self.emitConstant(numberValue(value));
     }
 
+    fn _super(self: *Compiler, _: bool) !void {
+        if (self.currentClass == null) {
+            self.errorAtCurrent("Can't use super outside of a class.");
+        } else if (self.currentClass.?.hasSuper == false) {
+            self.errorAtCurrent("Can't use super in a class with no super class.");
+        }
+
+        self.consume(TokenType.TOKEN_DOT, "Expect '.' after super.");
+        self.consume(TokenType.TOKEN_IDENTIFIER, "Expect superclass method name.");
+        const name = try self.identifierConstant();
+
+        try self.namedVariable(false, "this");
+
+        if (self.match(TokenType.TOKEN_LEFT_PAREN)) {
+            const argCount = try self.argumentList();
+            try self.namedVariable(false, "super");
+            try self.emitOpWithOperand(OpCode.OP_SUPER_INVOKE, name);
+            try self.emitByte(argCount);
+        } else {
+            try self.namedVariable(false, "super");
+            try self.emitOpWithOperand(OpCode.OP_GET_SUPER, name);
+        }
+    }
+
     fn this(self: *Compiler, _: bool) !void {
         if (self.currentClass == null) {
             self.errorAtCurrent("Can't use 'this' outside of a class.");
@@ -753,7 +799,7 @@ pub const Compiler = struct {
                 getOp = OpCode.OP_GET_UPVALUE;
                 setOp = OpCode.OP_SET_UPVALUE;
             } else {
-                arg = try self.identifierConstant();
+                arg = self.currentChunk().findValue(name) orelse try self.makeConstant(.{ .string = try self.vm.heap.copyString(name) });
                 getOp = OpCode.OP_GET_GLOBAL;
                 setOp = OpCode.OP_SET_GLOBAL;
             }
@@ -1109,6 +1155,11 @@ pub const Compiler = struct {
         return &self.currentFunction().chunk;
     }
 };
+
+fn identifiersEqual(a: []const u8, b: []const u8) bool {
+    if (a.len != b.len) return false;
+    return std.mem.eql(u8, a, b);
+}
 
 fn nextPrecedence(precedence: Precedence) Precedence {
     return @enumFromInt(@intFromEnum(precedence) + 1);

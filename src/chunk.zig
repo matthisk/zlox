@@ -9,6 +9,7 @@ pub const OpCode = enum(u8) {
     OP_GET_PROPERTY,
     OP_SET_PROPERTY,
     OP_CLASS,
+    OP_INHERIT,
     OP_ARRAY,
     OP_RETURN,
     OP_TRUE,
@@ -29,10 +30,12 @@ pub const OpCode = enum(u8) {
     OP_PRINT,
     OP_CALL,
     OP_INVOKE,
+    OP_SUPER_INVOKE,
     OP_CLOSURE,
     OP_POP,
     OP_POPN,
     OP_DEFINE_GLOBAL,
+    OP_GET_SUPER,
     OP_GET_GLOBAL,
     OP_SET_GLOBAL,
     OP_GET_LOCAL,
@@ -71,10 +74,10 @@ pub const Chunk = struct {
                 .OP_POPN, .OP_CALL, .OP_ARRAY, .OP_GET_UPVALUE, .OP_SET_UPVALUE, .OP_GET_LOCAL, .OP_SET_LOCAL => {
                     try writer.print("{s} [{d}]", .{ name, d.operand });
                 },
-                .OP_CONSTANT, .OP_DEFINE_GLOBAL, .OP_GET_GLOBAL, .OP_SET_GLOBAL, .OP_CLASS, .OP_GET_PROPERTY, .OP_SET_PROPERTY, .OP_METHOD => {
+                .OP_CONSTANT, .OP_DEFINE_GLOBAL, .OP_GET_GLOBAL, .OP_SET_GLOBAL, .OP_CLASS, .OP_GET_PROPERTY, .OP_SET_PROPERTY, .OP_METHOD, .OP_GET_SUPER => {
                     try writer.print("{s} [{d}] {f}", .{ name, d.operand, value_mod.format(data[d.operand]) });
                 },
-                .OP_INVOKE => {
+                .OP_INVOKE, .OP_SUPER_INVOKE => {
                     const argCount = code[d.op_offset + 2];
                     try writer.print("{s} [{d}] {f} (args = {d})", .{ name, d.operand, value_mod.format(data[d.operand]), argCount });
                 },
@@ -113,7 +116,7 @@ pub const Chunk = struct {
     /// Jumps are not listed: they have a fixed 2-byte operand.
     pub fn hasOperand(op: OpCode) bool {
         return switch (op) {
-            .OP_CONSTANT, .OP_DEFINE_GLOBAL, .OP_GET_GLOBAL, .OP_SET_GLOBAL, .OP_CLASS, .OP_METHOD, .OP_GET_PROPERTY, .OP_SET_PROPERTY, .OP_INVOKE, .OP_CLOSURE, .OP_POPN, .OP_ARRAY, .OP_CALL, .OP_GET_LOCAL, .OP_SET_LOCAL, .OP_GET_UPVALUE, .OP_SET_UPVALUE => true,
+            .OP_CONSTANT, .OP_DEFINE_GLOBAL, .OP_GET_GLOBAL, .OP_SET_GLOBAL, .OP_CLASS, .OP_METHOD, .OP_GET_PROPERTY, .OP_SET_PROPERTY, .OP_INVOKE, .OP_SUPER_INVOKE, .OP_CLOSURE, .OP_POPN, .OP_ARRAY, .OP_CALL, .OP_GET_LOCAL, .OP_SET_LOCAL, .OP_GET_UPVALUE, .OP_SET_UPVALUE, .OP_GET_SUPER => true,
             else => false,
         };
     }
@@ -244,7 +247,7 @@ pub const Chunk = struct {
         const d = self.decode(offset);
         const prefix = d.op_offset - offset;
         const base: usize = switch (d.op) {
-            .OP_JUMP_IF_FALSE, .OP_JUMP, .OP_LOOP, .OP_INVOKE => 3,
+            .OP_JUMP_IF_FALSE, .OP_JUMP, .OP_LOOP, .OP_INVOKE, .OP_SUPER_INVOKE => 3,
             else => if (hasOperand(d.op)) 2 else 1,
         };
         return prefix + base;

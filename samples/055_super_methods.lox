@@ -1,0 +1,61 @@
+class Animal {
+  init(name) {
+    this.name = name;
+  }
+
+  speak() {
+    return this.name + " makes a sound";
+  }
+
+  describe() {
+    return "an animal";
+  }
+}
+
+class Dog < Animal {
+  init(name) {
+    // Call the superclass initializer.
+    super.init(name);
+    this.tricks = 0;
+  }
+
+  speak() {
+    // Override, but build on the superclass implementation.
+    return super.speak() + " (woof)";
+  }
+}
+
+class Puppy < Dog {
+  speak() {
+    // super resolves to Dog, which in turn calls Animal.
+    return super.speak() + " (yip)";
+  }
+
+  describe() {
+    // Grab the super method as a bound value and call it later.
+    var parent = super.describe;
+    return "a young " + parent();
+  }
+
+  later() {
+    // super captured inside a closure.
+    fun inner() {
+      return super.speak();
+    }
+    return inner;
+  }
+}
+
+var dog = Dog("Rex");
+var puppy = Puppy("Bit");
+
+print dog.speak();
+print puppy.speak();
+print puppy.describe();
+print puppy.later()();
+
+var dogSpeaks = dog.speak() == "Rex makes a sound (woof)";
+var puppySpeaks = puppy.speak() == "Bit makes a sound (woof) (yip)";
+var inheritedInit = puppy.name == "Bit" and puppy.tricks == 0;
+var boundSuper = puppy.describe() == "a young an animal";
+var closureSuper = puppy.later()() == "Bit makes a sound (woof)";
