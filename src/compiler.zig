@@ -290,6 +290,7 @@ pub const Compiler = struct {
 
             self.beginScope();
             try self.addLocal("super");
+            try self.defineVariable(0);
             self.currentClass.?.hasSuper = true;
 
             try self.namedVariable(false, className.lexeme);
@@ -1214,7 +1215,7 @@ fn expectScopeCleanup(count: usize, captured: ?usize, expected: []const u8) !voi
 
 test "scope cleanup batches uncaptured locals" {
     try expectScopeCleanup(0, null, &.{});
-    try expectScopeCleanup(1, null, &.{ @intFromEnum(OpCode.OP_POPN), 1 });
+    try expectScopeCleanup(1, null, &.{@intFromEnum(OpCode.OP_POP)});
     try expectScopeCleanup(255, null, &.{ @intFromEnum(OpCode.OP_POPN), 255 });
     try expectScopeCleanup(256, null, &.{ @intFromEnum(OpCode.OP_EXTRA_ARG), 1, @intFromEnum(OpCode.OP_POPN), 0 });
 }

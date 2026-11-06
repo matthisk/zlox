@@ -38,7 +38,7 @@ pub const Engine = struct {
                 return .COMPILE_ERROR;
             },
             chunk_mod.ChunkErrors.OutOfConstantDataSlots => {
-                std.debug.print("Ran out of constant data slots (currently limited to 255).\n", .{});
+                std.debug.print("Ran out of constant data slots (currently limited to 2^32).\n", .{});
                 return .COMPILE_ERROR;
             },
             else => {
@@ -395,7 +395,7 @@ test "049 array methods" {
 }
 
 test "050 array index out of range" {
-    try std.testing.expectError(error.RuntimeError, executeTestFile(std.testing.allocator, "050_array_index_out_of_range.lox"));
+    try std.testing.expectEqual(InterpretResult.RUNTIME_ERROR, try executeTestFile(std.testing.allocator, "050_array_index_out_of_range.lox"));
 }
 
 test "051 array join" {
