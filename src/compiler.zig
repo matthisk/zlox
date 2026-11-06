@@ -814,7 +814,8 @@ pub const Compiler = struct {
                 getOp = OpCode.OP_GET_UPVALUE;
                 setOp = OpCode.OP_SET_UPVALUE;
             } else {
-                arg = self.currentChunk().findValue(name) orelse try self.makeConstant(.{ .string = try self.vm.heap.copyString(name) });
+                const internedName = try self.vm.heap.copyString(name);
+                arg = self.currentChunk().findValue(internedName.chars) orelse try self.makeConstant(.{ .string = internedName });
                 getOp = OpCode.OP_GET_GLOBAL;
                 setOp = OpCode.OP_SET_GLOBAL;
             }
