@@ -170,9 +170,84 @@ Unit tests live next to the code they test. Language behavior is tested with
 the numbered programs in [`samples/`](samples/), each paired with a test in
 [`src/engine.zig`](src/engine.zig) that checks its output or expected error.
 
-### Benchmarks
+## Benchmarks
+
+The project has a small benchmark system to measure how changes to the
+compiler or VM affect performance. Run it with:
 
 ```sh
-zig build bench            # runs every benchmark in bench/lox with a ReleaseFast build
-zig build bench -- fib loop  # runs only benchmarks whose name contains "fib" or "loop"
+zig build bench              # run every benchmark
+zig build bench -- fib loop  # run only benchmarks whose name contains "fib" or "loop"
 ```
+
+`zig build bench` always builds a separate `ReleaseFast` copy of zlox, so the
+numbers don't depend on the `-Doptimize` you pass to normal builds.
+
+### The benchmark programs
+
+Each benchmark is a Lox program in [`bench/lox/`](bench/lox/) that stresses
+one part of the interpreter:
+
+| Benchmark | What it stresses |
+| --- | --- |
+| [`fib`](bench/lox/fib.lox) | Recursive calls: `OP_CALL`, pushing and popping call frames, returns |
+| [`loop_locals`](bench/lox/loop_locals.lox) | A tight loop over locals: instruction dispatch, `OP_LOOP`, `GET/SET_LOCAL` |
+| [`loop_globals`](bench/lox/loop_globals.lox) | The same loop over globals: hash table lookups |
+| [`method_invoke`](bench/lox/method_invoke.lox) | Method calls on an instance: the fused `OP_INVOKE` instruction |
+| [`string_concat`](bench/lox/string_concat.lox) | Building many unique strings: allocation, hashing and string interning |
+| `compile_large` | A generated program with 10,000 small functions: scanner and compiler speed |
+
+`compile_large` is not checked in. At build time,
+[`bench/gen_compile_large.zig`](bench/gen_compile_large.zig) writes it out
+and it is added to the other benchmarks.
+
+### How a benchmark is measured
+
+Every benchmark follows the same pattern: it records `clock()` at the start,
+does its work, prints its result, and prints the elapsed time as the **last
+line**:
+
+```lox
+var start = clock();
+print fib(32);
+print clock() - start;
+```
+
+The runner, [`bench/runner.zig`](bench/runner.zig), starts zlox as a
+separate process for each benchmark. It runs each one once as a warmup and
+then 5 more times to measure. For every run it:
+
+1. Measures the **wall time** of the whole process. This includes start-up,
+   scanning and compiling.
+2. Reads the **VM time** from the last line of output. This only covers the
+   code between the two `clock()` calls.
+3. Compares all other output with
+   [`bench/expected/<name>.txt`](bench/expected/). A faster interpreter that
+   gives the wrong answer counts as a failure, not a speedup.
+
+A benchmark also fails if the script exits with an error, writes to stderr or
+crashes. The runner prints a table of the median and minimum wall time and the
+median VM time. For example, `zig build bench -- fib loop` gives:
+
+```
+zlox benchmarks (1 warmup, 5 measured runs)
+
+benchmark             wall median     wall min    vm median
+fib                      142.6 ms     137.4 ms     127.0 ms
+loop_globals             223.0 ms     221.4 ms     207.0 ms
+loop_locals              159.5 ms     158.8 ms     143.0 ms
+```
+
+The numbers depend on your machine, so compare runs on the same machine
+before and after a change.
+
+The median is used because it is less affected by one unusually slow run than
+the average.
+
+### Adding a benchmark
+
+1. Add `bench/lox/<name>.lox`. Make its last `print` the elapsed time from
+   `clock()`.
+2. Add `bench/expected/<name>.txt` with everything the program prints except
+   that last line.
+3. Run `zig build bench -- <name>` to check that it passes.
