@@ -2,6 +2,7 @@ const std = @import("std");
 const value_mod = @import("value.zig");
 const Value = value_mod.Value;
 const ObjFunction = value_mod.ObjFunction;
+const UpvalueDescriptor = value_mod.UpvalueDescriptor;
 const ObjStr = value_mod.ObjStr;
 
 pub const OpCode = enum(u8) {
@@ -73,19 +74,12 @@ pub const Chunk = struct {
                 .OP_POPN, .OP_CALL, .OP_ARRAY, .OP_GET_UPVALUE, .OP_SET_UPVALUE, .OP_GET_LOCAL, .OP_SET_LOCAL => {
                     try writer.print("{s} [{d}]", .{ name, d.operand });
                 },
-                .OP_CONSTANT, .OP_DEFINE_GLOBAL, .OP_GET_GLOBAL, .OP_SET_GLOBAL, .OP_CLASS, .OP_GET_PROPERTY, .OP_SET_PROPERTY, .OP_METHOD, .OP_GET_SUPER => {
+                .OP_CONSTANT, .OP_DEFINE_GLOBAL, .OP_GET_GLOBAL, .OP_SET_GLOBAL, .OP_CLASS, .OP_GET_PROPERTY, .OP_SET_PROPERTY, .OP_METHOD, .OP_GET_SUPER, .OP_CLOSURE => {
                     try writer.print("{s} [{d}] {f}", .{ name, d.operand, value_mod.format(data[d.operand]) });
                 },
                 .OP_INVOKE, .OP_SUPER_INVOKE => {
                     const argCount = code[d.op_offset + 2];
                     try writer.print("{s} [{d}] {f} (args = {d})", .{ name, d.operand, value_mod.format(data[d.operand]), argCount });
-                },
-                .OP_CLOSURE => {
-                    try writer.print("{s} [{d}] {f}", .{ name, d.operand, value_mod.format(data[d.operand]) });
-                    // The upvalue descriptors live on the function object, not in the bytecode.
-                    for (data[d.operand].as(ObjFunction).upvalues) |desc| {
-                        try writer.print(" ~ upvalue {s} [{d}]", .{ if (desc.isLocal) "<local>" else "", desc.index });
-                    }
                 },
                 .OP_JUMP_IF_FALSE, .OP_JUMP, .OP_LOOP => {
                     const high = code[d.op_offset + 1];
@@ -215,6 +209,9 @@ pub const Chunk = struct {
         }
 
         std.debug.print("{f}\n", .{self.formatInstruction(offset, true)});
+        for (self.closureUpvalues(offset)) |desc| {
+            std.debug.print("{d:0>4}    |   {f}\n", .{ offset, formatUpvalue(desc) });
+        }
         return offset + self.instructionLength(offset);
     }
 
@@ -225,6 +222,27 @@ pub const Chunk = struct {
             .show_opcode_prefix = show_opcode_prefix,
         };
     }
+
+    /// The upvalues captured by the OP_CLOSURE at `offset`, or an empty slice for
+    /// any other instruction. The descriptors live on the function object, not in
+    /// the bytecode, so callers print them on their own lines after the instruction.
+    pub fn closureUpvalues(self: *const Chunk, offset: usize) []const UpvalueDescriptor {
+        const d = self.decode(offset);
+        if (d.op != .OP_CLOSURE) return &.{};
+        return self.data.items[d.operand].as(ObjFunction).upvalues;
+    }
+
+    pub fn formatUpvalue(desc: UpvalueDescriptor) UpvalueFormatter {
+        return .{ .desc = desc };
+    }
+
+    pub const UpvalueFormatter = struct {
+        desc: UpvalueDescriptor,
+
+        pub fn format(self: UpvalueFormatter, writer: *std.Io.Writer) std.Io.Writer.Error!void {
+            try writer.print("~ upvalue {s} [{d}]", .{ if (self.desc.isLocal) "local" else "outer", self.desc.index });
+        }
+    };
 
     /// Decode the instruction at `offset`, folding in any OP_EXTRA_ARG prefixes.
     /// `offset` must be an instruction start (first prefix, or the opcode itself).

@@ -1105,6 +1105,11 @@ const ExecutionTrace = struct {
             try writer.writeAll(if (isFalsey(stack[stack.len - 1])) " | taken" else " | not taken");
         }
         try writer.writeByte('\n');
+
+        // One line per captured upvalue, aligned under the instruction column.
+        for (frame.closure.function.chunk.closureUpvalues(self.offset)) |desc| {
+            try writer.print("[vm]                | {f}\n", .{Chunk.formatUpvalue(desc)});
+        }
     }
 
     fn writeStackValues(writer: *std.Io.Writer, values: []const Value) std.Io.Writer.Error!void {
