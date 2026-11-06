@@ -15,8 +15,11 @@ comptime {
     }
 }
 
+const DebugAllocator = std.heap.DebugAllocator(.{});
+
 pub fn main(init: std.process.Init) !void {
-    const allocator = if (config.debug_vm) std.heap.DebugAllocator(.{}) else std.heap.c_allocator;
+    var debug_allocator: DebugAllocator = .init;
+    const allocator = if (config.debug_vm) debug_allocator.allocator() else std.heap.c_allocator;
 
     const args = try init.minimal.args.toSlice(allocator);
 
