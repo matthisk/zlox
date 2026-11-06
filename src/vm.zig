@@ -178,6 +178,7 @@ pub const VM = struct {
     }
 
     pub fn resetStack(self: *VM) void {
+        self.closeUpvalues(&self.stack.values[0]);
         self.stack.clearRetainingCapacity();
         self.frameCount = 0;
     }
