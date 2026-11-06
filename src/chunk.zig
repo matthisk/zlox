@@ -22,8 +22,6 @@ pub const OpCode = enum(u8) {
     OP_SUBTRACT,
     OP_MULTIPLY,
     OP_DIVIDE,
-    OP_AND,
-    OP_OR,
     OP_EQUALS,
     OP_LESS,
     OP_GREATER,

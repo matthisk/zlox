@@ -328,16 +328,6 @@ pub const VM = struct {
                         return err;
                     }
                 },
-                OpCode.OP_AND => {
-                    const b = self.stack.pop().?;
-                    const a = self.stack.pop().?;
-                    try self.stack.append(value.boolValue(isTruthy(a) and isTruthy(b)));
-                },
-                OpCode.OP_OR => {
-                    const b = self.stack.pop().?;
-                    const a = self.stack.pop().?;
-                    try self.stack.append(value.boolValue(isTruthy(a) or isTruthy(b)));
-                },
                 OpCode.OP_EQUALS => {
                     const b = self.stack.pop().?;
                     const a = self.stack.pop().?;
@@ -1205,16 +1195,6 @@ test "execution trace shows branch destination and decision" {
         "{f}",
         .{ExecutionTrace{ .vm = &vm, .offset = 0 }},
     );
-}
-
-inline fn isTruthy(v: Value) bool {
-    return switch (v) {
-        .bool => v.bool,
-        .number => false,
-        .nil => false,
-        .string, .function, .native, .closure, .class, .instance, .bound_method => true,
-        .array => v.array.values.items.len > 0,
-    };
 }
 
 inline fn isFalsey(v: Value) bool {
