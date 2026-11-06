@@ -222,16 +222,8 @@ pub const Heap = struct {
     }
 
     pub fn markValue(self: *Heap, value: Value) !void {
-        switch (value) {
-            .function => |f| try self.markObj(&f.obj),
-            .closure => |c| try self.markObj(&c.obj),
-            .native => |n| try self.markObj(&n.obj),
-            .string => |s| try self.markObj(&s.obj),
-            .array => |a| try self.markObj(&a.obj),
-            .class => |c| try self.markObj(&c.obj),
-            .instance => |i| try self.markObj(&i.obj),
-            .bound_method => |b| try self.markObj(&b.obj),
-            else => {},
+        if (value_mod.isObj(value)) {
+            try self.markObj(value_mod.asObj(value));
         }
     }
 
@@ -504,7 +496,7 @@ fn exerciseObjectAllocations(allocator: std.mem.Allocator) !void {
     const function = try heap.createFunction(name);
     function.upvalueCount = 1;
     const closure = try heap.createClosure(function);
-    var local: Value = .{ .number = 42 };
+    var local: Value = value_mod.numberValue(42);
     const upvalue = try heap.createUpvalue(&local);
     closure.setUpvalue(0, upvalue);
     const native = try heap.createNative(0, testNative);
@@ -512,8 +504,8 @@ fn exerciseObjectAllocations(allocator: std.mem.Allocator) !void {
     const class = try heap.createClass(className);
     const instance = try heap.createInstance(class);
     const fieldName = try heap.copyString("field");
-    try instance.fields.put(fieldName, .{ .number = 42 });
-    const bound = try heap.createBoundMethod(.{ .instance = instance }, .{ .closure = closure });
+    try instance.fields.put(fieldName, value_mod.numberValue(42));
+    const bound = try heap.createBoundMethod(value_mod.instanceValue(instance), value_mod.closureValue(closure));
 
     try std.testing.expect(heap.objects == &bound.obj);
     try std.testing.expect(bound.obj.next == &fieldName.obj);
@@ -526,9 +518,9 @@ fn exerciseObjectAllocations(allocator: std.mem.Allocator) !void {
     try std.testing.expect(closure.obj.next == &function.obj);
     try std.testing.expect(function.obj.next == &name.obj);
     try std.testing.expect(closure.upvalues[0].location == &local);
-    try std.testing.expectEqual(@as(f64, 42), instance.fields.get(fieldName).?.number);
-    try std.testing.expect(bound.method.closure == closure);
-    try std.testing.expect(bound.receiver.instance == instance);
+    try std.testing.expectEqual(@as(f64, 42), value_mod.asNumber(instance.fields.get(fieldName).?));
+    try std.testing.expect(value_mod.asClosure(bound.method) == closure);
+    try std.testing.expect(value_mod.asInstance(bound.receiver) == instance);
 }
 
 test "instance keeps its class and fields reachable" {
@@ -540,7 +532,7 @@ test "instance keeps its class and fields reachable" {
     const instance = try heap.createInstance(class);
     const fieldName = try heap.copyString("contents");
     const fieldValue = try heap.copyString("value");
-    try instance.fields.put(fieldName, .{ .string = fieldValue });
+    try instance.fields.put(fieldName, value_mod.stringValue(fieldValue));
 
     try heap.markObj(&instance.obj);
     try heap.traceReferences();
@@ -561,7 +553,7 @@ test "bound method keeps its receiver and method reachable" {
     const functionName = try heap.copyString("get");
     const function = try heap.createFunction(functionName);
     const closure = try heap.createClosure(function);
-    const bound = try heap.createBoundMethod(.{ .instance = instance }, .{ .closure = closure });
+    const bound = try heap.createBoundMethod(value_mod.instanceValue(instance), value_mod.closureValue(closure));
 
     try heap.markObj(&bound.obj);
     try heap.traceReferences();
@@ -574,7 +566,7 @@ test "bound method keeps its receiver and method reachable" {
 }
 
 fn testNative(_: *@import("vm.zig").VM, _: usize, _: []const Value) !Value {
-    return .nil;
+    return value_mod.nilValue();
 }
 
 test "heap owns every object kind including on allocation failure" {

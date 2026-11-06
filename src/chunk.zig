@@ -185,7 +185,7 @@ pub const Chunk = struct {
     pub fn findValue(self: *Chunk, v: []const u8) ?u32 {
         for (self.data.items, 0..) |value, i| {
             if (value_mod.isString(value)) {
-                const chars = value.string.chars;
+                const chars = value_mod.asString(value).chars;
                 if (chars.ptr == v.ptr and chars.len == v.len) {
                     // Impossible to find a dataslot that doesn't fit a u32, as it cannot be stored.
                     return std.math.cast(u32, i) orelse unreachable;

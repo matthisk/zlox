@@ -118,16 +118,15 @@ test "fixed stack preserves captured slots and rejects overflow" {
     try std.testing.expectError(error.StackOverflow, stack.append(value.nilValue()));
     try std.testing.expectEqual(@as(usize, STACK_MAX), stack.len);
     try std.testing.expect(captured == &stack.values[0]);
-    try std.testing.expectEqual(@as(f64, 42), captured.number);
+    try std.testing.expectEqual(@as(f64, 42), value.asNumber(captured.*));
 
     stack.shrinkRetainingCapacity(1);
-    try std.testing.expectEqual(@as(f64, 42), stack.pop().?.number);
+    try std.testing.expectEqual(@as(f64, 42), value.asNumber(stack.pop().?));
     try std.testing.expectEqual(@as(?Value, null), stack.pop());
     try stack.append(value.boolValue(true));
     stack.clearRetainingCapacity();
     try std.testing.expectEqual(@as(usize, 0), stack.len);
 }
-
 
 pub const VM = struct {
     io: std.Io,
@@ -216,11 +215,11 @@ pub const VM = struct {
     }
 
     pub fn startScript(self: *VM, function: *ObjFunction) !?RuntimeFault {
-        try self.stack.append(.{ .function = function });
+        try self.stack.append(value.functionValue(function));
         errdefer _ = self.stack.pop();
 
         const closure = try self.heap.createClosure(function);
-        self.stack.values[self.stack.len - 1] = .{ .closure = closure };
+        self.stack.values[self.stack.len - 1] = value.closureValue(closure);
         return self.call(closure, 0);
     }
 
@@ -313,14 +312,11 @@ pub const VM = struct {
                     try self.stack.append(value.boolValue(isFalsey(self.stack.pop().?)));
                 },
                 OpCode.OP_NEGATE => {
-                    switch (self.stack.getLast()) {
-                        .number => {
-                            self.stack.values[self.stack.len - 1].number *= -1;
-                        },
-                        else => {
-                            return .operand_must_be_number;
-                        },
+                    const v = self.stack.getLast();
+                    if (!value.isNumber(v)) {
+                        return .operand_must_be_number;
                     }
+                    self.stack.values[self.stack.len - 1] = value.numberValue(-value.asNumber(v));
                 },
                 OpCode.OP_ADD => {
                     if (try self.binaryOp(BinaryOperator.PLUS)) |err| {
@@ -378,7 +374,7 @@ pub const VM = struct {
                     const functionValue = self.readConstant(&ip, &extra, constants);
                     const f = value.asFunction(functionValue);
                     const c = try self.heap.createClosure(f);
-                    try self.stack.append(.{ .closure = c });
+                    try self.stack.append(value.closureValue(c));
 
                     var initialized = false;
                     defer {
@@ -427,7 +423,7 @@ pub const VM = struct {
                     // Safe the caller's ip address.
                     frame.ip = ip;
 
-                    if (try self.invoke(name.string, argCount)) |err| {
+                    if (try self.invoke(value.asString(name), argCount)) |err| {
                         return err;
                     }
                     frame = &self.frames[self.frameCount - 1];
@@ -436,9 +432,9 @@ pub const VM = struct {
                     ip = frame.ip;
                 },
                 OpCode.OP_SUPER_INVOKE => {
-                    const name = self.readConstant(&ip, &extra, constants).string;
+                    const name = value.asString(self.readConstant(&ip, &extra, constants));
                     const argCount = self.readByte(&ip);
-                    const super = self.stack.pop().?.class;
+                    const super = value.asClass(self.stack.pop().?);
 
                     frame.ip = ip;
 
@@ -453,17 +449,17 @@ pub const VM = struct {
                 OpCode.OP_CLASS => {
                     const name = self.readConstant(&ip, &extra, constants);
 
-                    try self.stack.append(.{ .class = try self.heap.createClass(name.string) });
+                    try self.stack.append(value.classValue(try self.heap.createClass(value.asString(name))));
                 },
                 OpCode.OP_INHERIT => {
                     const superClass = self.peekStack(1);
-                    const class = self.peekStack(0).class;
+                    const class = value.asClass(self.peekStack(0));
 
                     if (!value.isClass(superClass)) {
                         return .super_class_must_be_class;
                     }
 
-                    var it = superClass.class.methods.iterator();
+                    var it = value.asClass(superClass).methods.iterator();
                     while (it.next()) |entry| {
                         try class.methods.put(entry.key_ptr.*, entry.value_ptr.*);
                     }
@@ -473,11 +469,11 @@ pub const VM = struct {
                 OpCode.OP_METHOD => {
                     const name = self.readConstant(&ip, &extra, constants);
 
-                    try self.defineMethod(name.string);
+                    try self.defineMethod(value.asString(name));
                 },
                 OpCode.OP_GET_SUPER => {
-                    const name = self.readConstant(&ip, &extra, constants).string;
-                    const super = self.stack.pop().?.class;
+                    const name = value.asString(self.readConstant(&ip, &extra, constants));
+                    const super = value.asClass(self.stack.pop().?);
 
                     if (try self.bindMethod(super, name)) |err| {
                         return err;
@@ -490,14 +486,14 @@ pub const VM = struct {
                     // replaces it with the bound method itself.
                     const v = self.peekStack(0);
                     if (value.isInstance(v)) {
-                        if (v.instance.fields.get(name.string)) |val| {
+                        if (value.asInstance(v).fields.get(value.asString(name))) |val| {
                             _ = self.stack.pop();
                             try self.stack.append(val);
                             continue;
                         }
                     }
                     if (self.getClass(v)) |class| {
-                        if (try self.bindMethod(class, name.string)) |err| {
+                        if (try self.bindMethod(class, value.asString(name))) |err| {
                             return err;
                         }
                     } else {
@@ -510,7 +506,7 @@ pub const VM = struct {
                     const v = self.stack.pop().?;
                     const instance = self.stack.pop().?;
                     if (value.isInstance(instance)) {
-                        try instance.instance.fields.put(name.string, v);
+                        try value.asInstance(instance).fields.put(value.asString(name), v);
                         try self.stack.append(v);
                     } else {
                         return .not_assignable;
@@ -518,21 +514,21 @@ pub const VM = struct {
                 },
                 OpCode.OP_DEFINE_GLOBAL => {
                     const identifier = self.readConstant(&ip, &extra, constants);
-                    try self.globals.put(identifier.string, self.stack.pop().?);
+                    try self.globals.put(value.asString(identifier), self.stack.pop().?);
                 },
                 OpCode.OP_GET_GLOBAL => {
                     const identfier = self.readConstant(&ip, &extra, constants);
-                    const v = self.globals.get(identfier.string);
+                    const v = self.globals.get(value.asString(identfier));
 
                     if (v == null) {
-                        return .{ .undefined_variable = identfier.string.chars };
+                        return .{ .undefined_variable = value.asString(identfier).chars };
                     } else {
                         try self.stack.append(v.?);
                     }
                 },
                 OpCode.OP_SET_GLOBAL => {
                     const identifier = self.readConstant(&ip, &extra, constants);
-                    const name = identifier.string;
+                    const name = value.asString(identifier);
                     if (self.globals.contains(name)) {
                         try self.globals.put(name, self.peekStack(0));
                     } else {
@@ -568,7 +564,7 @@ pub const VM = struct {
                     try array.values.appendSlice(self.heap.allocator, items);
 
                     self.stack.shrinkRetainingCapacity(self.stack.len - len);
-                    try self.stack.append(.{ .array = array });
+                    try self.stack.append(value.arrayValue(array));
                 },
                 OpCode.ILLEGAL => {
                     return .{ .illegal_opcode = instruction_byte };
@@ -579,7 +575,7 @@ pub const VM = struct {
 
     inline fn defineMethod(self: *VM, name: *ObjStr) !void {
         const method = self.peekStack(0);
-        const class = self.peekStack(1).class;
+        const class = value.asClass(self.peekStack(1));
         try class.methods.put(name, method);
         _ = self.stack.pop();
     }
@@ -589,7 +585,7 @@ pub const VM = struct {
 
         const bound = try self.heap.createBoundMethod(self.peekStack(0), method);
         _ = self.stack.pop();
-        try self.stack.append(.{ .bound_method = bound });
+        try self.stack.append(value.boundMethodValue(bound));
 
         return null;
     }
@@ -659,7 +655,7 @@ pub const VM = struct {
             if (self.checkStringOperands()) {
                 try self.concatenate();
             } else if (self.checkNumberOperands()) {
-                const result = value.numberValue(self.stack.pop().?.number + self.stack.pop().?.number);
+                const result = value.numberValue(value.asNumber(self.stack.pop().?) + value.asNumber(self.stack.pop().?));
                 try self.stack.append(result);
             } else if (self.checkArrayOperands()) {
                 try self.concatArrays();
@@ -668,8 +664,8 @@ pub const VM = struct {
             }
         } else if (self.checkNumberOperands()) {
             // Safe to expect both entries to be numbers.
-            const b = self.stack.pop().?.number;
-            const a = self.stack.pop().?.number;
+            const b = value.asNumber(self.stack.pop().?);
+            const a = value.asNumber(self.stack.pop().?);
 
             const result = switch (op) {
                 .PLUS => value.numberValue(a + b),
@@ -688,14 +684,14 @@ pub const VM = struct {
     }
 
     inline fn concatenate(self: *VM) !void {
-        const b = self.peekStack(0).string.chars;
-        const a = self.peekStack(1).string.chars;
+        const b = value.asString(self.peekStack(0)).chars;
+        const a = value.asString(self.peekStack(1)).chars;
 
         // Perform a garbage collection run (if needed) before we allocate the new string buffer.
         try self.heap.checkAndCollect();
 
         const chars = try std.mem.concat(self.heap.allocator, u8, &[_][]const u8{ a, b });
-        const v: Value = .{ .string = try self.heap.takeString(chars) };
+        const v: Value = value.stringValue(try self.heap.takeString(chars));
 
         _ = self.stack.pop();
         _ = self.stack.pop();
@@ -704,8 +700,8 @@ pub const VM = struct {
     }
 
     inline fn concatArrays(self: *VM) !void {
-        const b = self.peekStack(0).array;
-        const a = self.peekStack(1).array;
+        const b = value.asArray(self.peekStack(0));
+        const a = value.asArray(self.peekStack(1));
 
         try self.heap.checkAndCollect();
 
@@ -717,34 +713,29 @@ pub const VM = struct {
         _ = self.stack.pop();
         _ = self.stack.pop();
 
-        try self.stack.append(.{ .array = combined });
+        try self.stack.append(value.arrayValue(combined));
     }
 
     fn valuesEqual(self: *VM, a: Value, b: Value) bool {
-        if (std.meta.activeTag(a) != std.meta.activeTag(b)) {
-            return false;
+        if (value.isNumber(a) and value.isNumber(b)) return value.asNumber(a) == value.asNumber(b);
+        if (value.isBool(a) and value.isBool(b)) return value.asBool(a) == value.asBool(b);
+        if (value.isNil(a) and value.isNil(b)) return true;
+        if (value.isString(a) and value.isString(b)) {
+            return std.mem.eql(u8, value.asStr(a), value.asStr(b));
         }
-
-        return switch (a) {
-            .number => a.number == b.number,
-            .bool => a.bool == b.bool,
-            .nil => true,
-            .string => |s| std.mem.eql(u8, s.chars, b.string.chars),
-            .function => |f| f == b.function,
-            .native => |n| n == b.native,
-            .closure => |c| c == b.closure,
-            .class => |class| class == b.class,
-            .instance => |instance| instance == b.instance,
-            .bound_method => |bound| bound == b.bound_method,
-            .array => {
-                if (a.array.values.items.len != b.array.values.items.len) return false;
-                if (a.array == b.array) return true;
-                for (0..a.array.values.items.len) |i| {
-                    if (!self.valuesEqual(a.array.values.items[i], b.array.values.items[i])) return false;
-                }
-                return true;
-            },
-        };
+        if (value.isArray(a) and value.isArray(b)) {
+            const arrayA = value.asArray(a);
+            const arrayB = value.asArray(b);
+            if (arrayA.values.items.len != arrayB.values.items.len) return false;
+            if (arrayA == arrayB) return true;
+            for (arrayA.values.items, arrayB.values.items) |itemA, itemB| {
+                if (!self.valuesEqual(itemA, itemB)) return false;
+            }
+            return true;
+        }
+        // All other objects (functions, classes, instances, ...) compare by identity.
+        if (value.isObj(a) and value.isObj(b)) return value.asObj(a) == value.asObj(b);
+        return false;
     }
 
     inline fn invoke(self: *VM, name: *ObjStr, argCount: u8) !?RuntimeFault {
@@ -752,7 +743,7 @@ pub const VM = struct {
 
         // A field shadows a method of the same name. Only instances have fields.
         if (value.isInstance(receiver)) {
-            if (receiver.instance.fields.get(name)) |f| {
+            if (value.asInstance(receiver).fields.get(name)) |f| {
                 self.stack.values[self.stack.len - argCount - 1] = f;
                 return try self.callValue(f, argCount);
             }
@@ -765,11 +756,9 @@ pub const VM = struct {
     /// Every value that can have methods has a class. Instances carry a pointer to
     /// theirs; built-in types like arrays share a class owned by the VM.
     inline fn getClass(self: *VM, v: Value) ?*ObjClass {
-        return switch (v) {
-            .instance => |instance| instance.class,
-            .array => self.arrayClass,
-            else => null,
-        };
+        if (value.isInstance(v)) return value.asInstance(v).class;
+        if (value.isArray(v)) return self.arrayClass;
+        return null;
     }
 
     inline fn invokeFromClass(self: *VM, receiver: *ObjClass, name: *ObjStr, argCount: u8) !?RuntimeFault {
@@ -781,37 +770,35 @@ pub const VM = struct {
     }
 
     inline fn callValue(self: *VM, callee: Value, argCount: u8) !?RuntimeFault {
-        switch (callee) {
-            .class => |class| {
-                // The class sits below the arguments; replace it with the new
-                // instance so it becomes slot 0 of the callee's frame.
-                const instance = try self.heap.createInstance(class);
-                self.stack.values[self.stack.len - argCount - 1] = .{ .instance = instance };
-                if (class.methods.get(self.initString)) |initMethod| {
-                    return try self.callMethod(initMethod, argCount);
-                } else if (argCount != 0) {
-                    return .{ .expected_arguments = .{ .expected = 0, .actual = argCount } };
-                }
-                return null;
-            },
-            .bound_method => |bound| {
-                // Slot 0 holds `this`, so overwrite the bound method with its receiver.
-                self.stack.values[self.stack.len - argCount - 1] = bound.receiver;
-                return try self.callMethod(bound.method, argCount);
-            },
-            .closure => |closure| return try self.callClosure(closure, argCount),
-            .native => |native| return try self.callNative(native, argCount),
-            else => return .not_callable,
+        if (value.isClass(callee)) {
+            const class = value.asClass(callee);
+            // The class sits below the arguments; replace it with the new
+            // instance so it becomes slot 0 of the callee's frame.
+            const instance = try self.heap.createInstance(class);
+            self.stack.values[self.stack.len - argCount - 1] = value.instanceValue(instance);
+            if (class.methods.get(self.initString)) |initMethod| {
+                return try self.callMethod(initMethod, argCount);
+            } else if (argCount != 0) {
+                return .{ .expected_arguments = .{ .expected = 0, .actual = argCount } };
+            }
+            return null;
         }
+        if (value.isBoundMethod(callee)) {
+            const bound = value.asBoundMethod(callee);
+            // Slot 0 holds `this`, so overwrite the bound method with its receiver.
+            self.stack.values[self.stack.len - argCount - 1] = bound.receiver;
+            return try self.callMethod(bound.method, argCount);
+        }
+        if (value.isClosure(callee)) return try self.callClosure(value.asClosure(callee), argCount);
+        if (value.isNative(callee)) return try self.callNative(value.asNative(callee), argCount);
+        return .not_callable;
     }
 
     /// Calls a method from `ObjClass.methods`. The receiver must already be in slot 0.
     inline fn callMethod(self: *VM, method: Value, argCount: u8) !?RuntimeFault {
-        return switch (method) {
-            .closure => |closure| try self.callClosure(closure, argCount),
-            .native => |native| try self.callNative(native, argCount),
-            else => unreachable, // classes only hold closures and natives
-        };
+        if (value.isClosure(method)) return try self.callClosure(value.asClosure(method), argCount);
+        if (value.isNative(method)) return try self.callNative(value.asNative(method), argCount);
+        unreachable; // classes only hold closures and natives
     }
 
     inline fn callClosure(self: *VM, closure: *ObjClosure, argCount: u8) !?RuntimeFault {
@@ -857,13 +844,13 @@ pub const VM = struct {
 
     fn defineNativeMethod(self: *VM, class: *ObjClass, name: []const u8, arity: u8, native: value.NativeFn) !void {
         const method = try self.heap.createNative(arity, native);
-        try class.methods.put(try self.heap.copyString(name), .{ .native = method });
+        try class.methods.put(try self.heap.copyString(name), value.nativeValue(method));
     }
 
     fn defineNative(self: *VM, name: []const u8, arity: u8, native: value.NativeFn) !void {
-        try self.stack.append(.{ .string = try self.heap.copyString(name) });
-        try self.stack.append(.{ .native = try self.heap.createNative(arity, native) });
-        try self.globals.put(self.stack.values[0].string, self.stack.values[1]);
+        try self.stack.append(value.stringValue(try self.heap.copyString(name)));
+        try self.stack.append(value.nativeValue(try self.heap.createNative(arity, native)));
+        try self.globals.put(value.asString(self.stack.values[0]), self.stack.values[1]);
         _ = self.stack.pop();
         _ = self.stack.pop();
     }
@@ -938,7 +925,7 @@ pub fn readLineNative(vm: *VM, _: usize, _: []const Value) !Value {
 fn readLineFrom(vm: *VM, reader: *std.Io.Reader) !Value {
     const line = try reader.takeDelimiter('\n') orelse return value.nilValue();
     // The slice points into the reader's buffer, so the string must copy it.
-    return .{ .string = try vm.heap.copyString(std.mem.trimEnd(u8, line, "\r")) };
+    return value.stringValue(try vm.heap.copyString(std.mem.trimEnd(u8, line, "\r")));
 }
 
 pub fn writeFileNative(vm: *VM, argCount: usize, args: []const Value) !Value {
@@ -950,8 +937,8 @@ pub fn writeFileNative(vm: *VM, argCount: usize, args: []const Value) !Value {
     }
 
     try std.Io.Dir.cwd().writeFile(vm.io, .{
-        .sub_path = args[1].string.chars,
-        .data = args[2].string.chars,
+        .sub_path = value.asString(args[1]).chars,
+        .data = value.asString(args[2]).chars,
     });
 
     return value.nilValue();
@@ -966,9 +953,9 @@ pub fn appendFileNative(vm: *VM, argCount: usize, args: []const Value) !Value {
     }
 
     // std.Io has no append mode, so open without truncating and write at the end.
-    const file = try std.Io.Dir.cwd().createFile(vm.io, args[1].string.chars, .{ .truncate = false });
+    const file = try std.Io.Dir.cwd().createFile(vm.io, value.asString(args[1]).chars, .{ .truncate = false });
     defer file.close(vm.io);
-    try file.writePositionalAll(vm.io, args[2].string.chars, try file.length(vm.io));
+    try file.writePositionalAll(vm.io, value.asString(args[2]).chars, try file.length(vm.io));
 
     return value.nilValue();
 }
@@ -978,21 +965,23 @@ pub fn strNative(vm: *VM, argCount: usize, args: []const Value) !Value {
         return Errors.RuntimeError;
     }
     const v = args[1];
-    const str = switch (v) {
-        .bool => |b| try vm.heap.copyString(if (b) "true" else "false"),
-        .number => |n| try vm.heap.takeString(try std.fmt.allocPrint(vm.heap.allocator, "{d}", .{n})),
-        .nil => try vm.heap.copyString("nil"),
-        .string => |s| s,
-        .function => try vm.heap.copyString("function"),
+    const str = if (value.isBool(v))
+        try vm.heap.copyString(if (value.asBool(v)) "true" else "false")
+    else if (value.isNumber(v))
+        try vm.heap.takeString(try std.fmt.allocPrint(vm.heap.allocator, "{d}", .{value.asNumber(v)}))
+    else if (value.isNil(v))
+        try vm.heap.copyString("nil")
+    else switch (value.asObj(v).kind) {
+        .str => value.asString(v),
+        .function, .closure, .bound_method => try vm.heap.copyString("function"),
         .native => try vm.heap.copyString("native"),
-        .closure => try vm.heap.copyString("function"),
         .array => try vm.heap.copyString("array"),
         .class => try vm.heap.copyString("class"),
         .instance => try vm.heap.copyString("instance"),
-        .bound_method => try vm.heap.copyString("function"),
+        .upvalue => unreachable, // upvalues are never stored in a Value
     };
 
-    return .{ .string = str };
+    return value.stringValue(str);
 }
 
 pub fn sqrtNative(_: *VM, argCount: usize, args: []const Value) !Value {
@@ -1002,7 +991,7 @@ pub fn sqrtNative(_: *VM, argCount: usize, args: []const Value) !Value {
     if (!value.isNumber(args[1])) {
         return Errors.RuntimeError;
     }
-    return value.numberValue(std.math.sqrt(args[1].number));
+    return value.numberValue(std.math.sqrt(value.asNumber(args[1])));
 }
 
 pub fn floorNative(_: *VM, argCount: usize, args: []const Value) !Value {
@@ -1012,32 +1001,32 @@ pub fn floorNative(_: *VM, argCount: usize, args: []const Value) !Value {
     if (!value.isNumber(args[1])) {
         return Errors.RuntimeError;
     }
-    return value.numberValue(@floor(args[1].number));
+    return value.numberValue(@floor(value.asNumber(args[1])));
 }
 
 // Array methods. `args[0]` is the receiver: `getClass` only dispatches to these
 // for `.array` values, so it is always an array.
 
 pub fn arrayPushNative(vm: *VM, _: usize, args: []const Value) !Value {
-    try args[0].array.values.append(vm.heap.allocator, args[1]);
+    try value.asArray(args[0]).values.append(vm.heap.allocator, args[1]);
     return value.nilValue();
 }
 
 pub fn arrayPopNative(_: *VM, _: usize, args: []const Value) !Value {
-    return args[0].array.values.pop() orelse Errors.RuntimeError;
+    return value.asArray(args[0]).values.pop() orelse Errors.RuntimeError;
 }
 
 pub fn arrayLenNative(_: *VM, _: usize, args: []const Value) !Value {
-    return value.numberValue(@floatFromInt(args[0].array.values.items.len));
+    return value.numberValue(@floatFromInt(value.asArray(args[0]).values.items.len));
 }
 
 pub fn arrayGetNative(_: *VM, _: usize, args: []const Value) !Value {
-    const items = args[0].array.values.items;
+    const items = value.asArray(args[0]).values.items;
     return items[try arrayIndex(items.len, args[1])];
 }
 
 pub fn arraySetNative(_: *VM, _: usize, args: []const Value) !Value {
-    const items = args[0].array.values.items;
+    const items = value.asArray(args[0]).values.items;
     items[try arrayIndex(items.len, args[1])] = args[2];
     return args[2];
 }
@@ -1046,23 +1035,23 @@ pub fn arraySetNative(_: *VM, _: usize, args: []const Value) !Value {
 /// Items are converted like `print` does, so strings are included as-is.
 pub fn arrayJoinNative(vm: *VM, _: usize, args: []const Value) !Value {
     if (!value.isString(args[1])) return Errors.RuntimeError;
-    const separator = args[1].string.chars;
+    const separator = value.asString(args[1]).chars;
 
     var out: std.Io.Writer.Allocating = .init(vm.heap.allocator);
     defer out.deinit();
-    for (args[0].array.values.items, 0..) |item, i| {
+    for (value.asArray(args[0]).values.items, 0..) |item, i| {
         if (i > 0) try out.writer.writeAll(separator);
         try value.write(item, &out.writer);
     }
 
     // `takeString` adopts the buffer, so `out.deinit()` has nothing left to free.
-    return .{ .string = try vm.heap.takeString(try out.toOwnedSlice()) };
+    return value.stringValue(try vm.heap.takeString(try out.toOwnedSlice()));
 }
 
 /// Indices must be whole numbers in `0..len`.
 fn arrayIndex(len: usize, index: Value) !usize {
     if (!value.isNumber(index)) return Errors.RuntimeError;
-    const n = index.number;
+    const n = value.asNumber(index);
     if (n < 0 or n != @floor(n) or n >= @as(f64, @floatFromInt(len))) return Errors.RuntimeError;
     return @intFromFloat(n);
 }
@@ -1129,9 +1118,9 @@ test "object equality compares strings by content and callables by identity" {
 
     var a = value.ObjStr{ .chars = "same" };
     var b = value.ObjStr{ .chars = "same" };
-    try std.testing.expect(vm.valuesEqual(.{ .string = &a }, .{ .string = &b }));
+    try std.testing.expect(vm.valuesEqual(value.stringValue(&a), value.stringValue(&b)));
     b.chars = "different";
-    try std.testing.expect(!vm.valuesEqual(.{ .string = &a }, .{ .string = &b }));
+    try std.testing.expect(!vm.valuesEqual(value.stringValue(&a), value.stringValue(&b)));
 
     const name = try vm.heap.copyString("test");
     const function = try vm.heap.createFunction(name);
@@ -1140,14 +1129,14 @@ test "object equality compares strings by content and callables by identity" {
     const otherClosure = try vm.heap.createClosure(function);
     const native = try vm.heap.createNative(0, readLineNative);
     const otherNative = try vm.heap.createNative(0, readLineNative);
-    try std.testing.expect(vm.valuesEqual(.{ .function = function }, .{ .function = function }));
-    try std.testing.expect(!vm.valuesEqual(.{ .function = function }, .{ .function = otherFunction }));
-    try std.testing.expect(vm.valuesEqual(.{ .closure = closure }, .{ .closure = closure }));
-    try std.testing.expect(!vm.valuesEqual(.{ .closure = closure }, .{ .closure = otherClosure }));
-    try std.testing.expect(vm.valuesEqual(.{ .native = native }, .{ .native = native }));
-    try std.testing.expect(!vm.valuesEqual(.{ .native = native }, .{ .native = otherNative }));
-    try std.testing.expect(!vm.valuesEqual(.{ .closure = closure }, .{ .function = function }));
-    try std.testing.expect(!vm.valuesEqual(.{ .string = &a }, .nil));
+    try std.testing.expect(vm.valuesEqual(value.functionValue(function), value.functionValue(function)));
+    try std.testing.expect(!vm.valuesEqual(value.functionValue(function), value.functionValue(otherFunction)));
+    try std.testing.expect(vm.valuesEqual(value.closureValue(closure), value.closureValue(closure)));
+    try std.testing.expect(!vm.valuesEqual(value.closureValue(closure), value.closureValue(otherClosure)));
+    try std.testing.expect(vm.valuesEqual(value.nativeValue(native), value.nativeValue(native)));
+    try std.testing.expect(!vm.valuesEqual(value.nativeValue(native), value.nativeValue(otherNative)));
+    try std.testing.expect(!vm.valuesEqual(value.closureValue(closure), value.functionValue(function)));
+    try std.testing.expect(!vm.valuesEqual(value.stringValue(&a), value.nilValue()));
 }
 
 test "readLine returns lines without line endings and nil at end of input" {
@@ -1155,9 +1144,9 @@ test "readLine returns lines without line endings and nil at end of input" {
     defer vm.deinit();
 
     var reader: std.Io.Reader = .fixed("first\nsecond\r\nlast");
-    try std.testing.expectEqualStrings("first", (try readLineFrom(&vm, &reader)).string.chars);
-    try std.testing.expectEqualStrings("second", (try readLineFrom(&vm, &reader)).string.chars);
-    try std.testing.expectEqualStrings("last", (try readLineFrom(&vm, &reader)).string.chars);
+    try std.testing.expectEqualStrings("first", value.asString(try readLineFrom(&vm, &reader)).chars);
+    try std.testing.expectEqualStrings("second", value.asString(try readLineFrom(&vm, &reader)).chars);
+    try std.testing.expectEqualStrings("last", value.asString(try readLineFrom(&vm, &reader)).chars);
     try std.testing.expect(value.isNil(try readLineFrom(&vm, &reader)));
 }
 
@@ -1167,9 +1156,9 @@ test "writeFile native requires a path and contents string" {
 
     const contents = try vm.heap.copyString("contents");
     const args = [_]Value{
-        .nil, // slot 0: the native itself, unused here
+        value.nilValue(), // slot 0: the native itself, unused here
         value.numberValue(1),
-        .{ .string = contents },
+        value.stringValue(contents),
     };
 
     try std.testing.expectError(error.RuntimeError, writeFileNative(&vm, args.len - 1, &args));
@@ -1236,11 +1225,9 @@ test "execution trace shows branch destination and decision" {
 }
 
 inline fn isFalsey(v: Value) bool {
-    return switch (v) {
-        .bool => !v.bool,
-        .number => false,
-        .nil => true,
-        .string, .function, .native, .closure, .class, .instance, .bound_method => false,
-        .array => v.array.values.items.len == 0,
-    };
+    if (value.isBool(v)) return !value.asBool(v);
+    if (value.isNil(v)) return true;
+    // Empty arrays are falsey, all other numbers and objects are truthy.
+    if (value.isArray(v)) return value.asArray(v).values.items.len == 0;
+    return false;
 }
