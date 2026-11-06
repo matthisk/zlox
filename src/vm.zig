@@ -43,6 +43,7 @@ const RuntimeFault = union(enum) {
     stack_overflow,
     not_callable,
     not_assignable,
+    not_an_object,
     unknown_property: struct { name: []const u8 },
     illegal_opcode: u8,
 
@@ -63,6 +64,7 @@ const RuntimeFault = union(enum) {
             .not_assignable => try writer.writeAll("Can only assign to class instances."),
             .unknown_property => |e| try writer.print("Unknown property '{s}'", .{e.name}),
             .native_error => try writer.writeAll("Error in native method."),
+            .not_an_object => try writer.writeAll("Can only get properties of an object"),
         }
     }
 };
@@ -495,7 +497,7 @@ pub const VM = struct {
                             return err;
                         }
                     } else {
-                        return .not_assignable;
+                        return .not_an_object;
                     }
                 },
                 OpCode.OP_SET_PROPERTY => {
