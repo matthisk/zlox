@@ -900,6 +900,7 @@ pub const Compiler = struct {
                 try self.expression();
                 if (argCount == 255) {
                     self.errorAtCurrent("Can't have more than 255 arguments.");
+                    return argCount;
                 }
                 argCount += 1;
                 if (!self.match(TokenType.TOKEN_COMMA)) break;
