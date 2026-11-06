@@ -1,4 +1,5 @@
 const std = @import("std");
+const config = @import("config");
 const Engine = @import("engine.zig").Engine;
 
 comptime {
@@ -15,7 +16,7 @@ comptime {
 }
 
 pub fn main(init: std.process.Init) !void {
-    const allocator = init.arena.allocator();
+    const allocator = if (config.debug_vm) std.heap.DebugAllocator(.{}) else std.heap.c_allocator;
 
     const args = try init.minimal.args.toSlice(allocator);
 
