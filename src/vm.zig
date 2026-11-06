@@ -34,6 +34,7 @@ const RuntimeFault = union(enum) {
     operands_must_be_numbers,
     operands_must_be_numbers_or_strings,
     super_class_must_be_class,
+    native_error,
     undefined_variable: []const u8,
     expected_arguments: struct {
         expected: usize,
@@ -61,6 +62,7 @@ const RuntimeFault = union(enum) {
             .illegal_opcode => |opcode| try writer.print("Unknown opcode 0x{x:0>2}.", .{opcode}),
             .not_assignable => try writer.writeAll("Can only assign to class instances."),
             .unknown_property => |e| try writer.print("Unknown property '{s}'", .{e.name}),
+            .native_error => try writer.writeAll("Error in native method."),
         }
     }
 };
@@ -824,7 +826,9 @@ pub const VM = struct {
         // Like a closure's frame, the native sees slot 0 (the receiver or the
         // native itself) followed by the arguments.
         const slot0 = self.stack.len - argCount - 1;
-        const result = try native.function(self, argCount, self.stack.values[slot0..self.stack.len]);
+        const result = native.function(self, argCount, self.stack.values[slot0..self.stack.len]) catch {
+            return .native_error;
+        };
         self.stack.shrinkRetainingCapacity(slot0);
         try self.stack.append(result);
         return null;
