@@ -139,6 +139,9 @@ pub const VM = struct {
     initString: *ObjStr = undefined,
     /// The class of every `.array` value, see `getClass`. Its methods are natives.
     arrayClass: *ObjClass = undefined,
+    stdoutIsTty: bool = true,
+    stdoutBuffer: [4096]u8 = undefined,
+    stdoutWriter: std.Io.File.Writer = undefined,
 
     pub fn init(io: std.Io, allocator: std.mem.Allocator) !VM {
         var vm = VM{
@@ -150,6 +153,7 @@ pub const VM = struct {
             .frameCount = 0,
         };
         errdefer vm.deinit();
+
         vm.initString = try vm.heap.copyString("init");
         // Build the array class before enabling the GC, so we don't have to keep
         // the half-built class and its method names rooted on the stack.
@@ -215,6 +219,10 @@ pub const VM = struct {
     }
 
     pub fn run(self: *VM) !InterpretResult {
+        self.stdoutWriter = std.Io.File.stdout().writerStreaming(self.io, &self.stdoutBuffer);
+        self.stdoutIsTty = try std.Io.File.stdout().isTty(self.io);
+        defer self.stdoutWriter.flush() catch {};
+
         const fault = self.runInstructions() catch |err| switch (err) {
             error.StackOverflow => RuntimeFault.stack_overflow,
             else => return err,
@@ -871,12 +879,10 @@ pub const VM = struct {
     }
 
     fn printProgramValue(self: *VM, v: Value) !void {
-        var buffer: [256]u8 = undefined;
-        var stdout_writer = std.Io.File.stdout().writerStreaming(self.io, &buffer);
-        const stdout = &stdout_writer.interface;
+        const stdout = &self.stdoutWriter.interface;
         try value.write(v, stdout);
         try stdout.writeByte('\n');
-        try stdout.flush();
+        if (self.stdoutIsTty) try stdout.flush();
     }
 
     fn finish(_: *VM, result: InterpretResult, instruction_count: usize) InterpretResult {
@@ -890,6 +896,8 @@ pub const VM = struct {
     }
 
     fn runtimeError(self: *VM, runtimeFault: RuntimeFault) void {
+        self.stdoutWriter.flush() catch {};
+
         const frame = &self.frames[self.frameCount - 1];
         const instruction = @intFromPtr(frame.ip) - @intFromPtr(frame.closure.function.chunk.code.items.ptr) - 1;
         const line = frame.closure.function.chunk.getLine(instruction);
