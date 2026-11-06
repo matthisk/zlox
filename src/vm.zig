@@ -1116,8 +1116,8 @@ test "object equality compares strings by content and callables by identity" {
     var vm = try VM.init(std.testing.io, std.testing.allocator);
     defer vm.deinit();
 
-    var a = value.ObjStr{ .chars = "same" };
-    var b = value.ObjStr{ .chars = "same" };
+    var a = value.ObjStr{ .chars = "same", .hash = 0 };
+    var b = value.ObjStr{ .chars = "same", .hash = 0 };
     try std.testing.expect(vm.valuesEqual(value.stringValue(&a), value.stringValue(&b)));
     b.chars = "different";
     try std.testing.expect(!vm.valuesEqual(value.stringValue(&a), value.stringValue(&b)));

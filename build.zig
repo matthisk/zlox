@@ -20,6 +20,8 @@ pub fn build(b: *std.Build) void {
     options.addOption(bool, "debug_compiler", b.option(bool, "debug-compiler", "Enable compiler debug output") orelse false);
     options.addOption(bool, "debug_vm", b.option(bool, "debug-vm", "Enable VM debug output") orelse false);
     options.addOption(bool, "debug_gc", b.option(bool, "debug-gc", "Enable GC debug output") orelse false);
+    const nan_boxing = b.option(bool, "nan-boxing", "Enable NaN boxing") orelse false;
+    options.addOption(bool, "nan_boxing", nan_boxing);
 
     // We will also create a module for our other entry point, 'main.zig'.
     const exe_mod = b.createModule(.{
@@ -93,6 +95,7 @@ pub fn build(b: *std.Build) void {
     bench_options.addOption(bool, "debug_compiler", false);
     bench_options.addOption(bool, "debug_vm", false);
     bench_options.addOption(bool, "debug_gc", false);
+    bench_options.addOption(bool, "nan_boxing", nan_boxing);
 
     const bench_zlox_mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),

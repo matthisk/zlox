@@ -454,7 +454,7 @@ test "heap registers and destroys allocated objects" {
 
 test "heap creates and owns function objects" {
     var heap = try Heap.init(std.testing.allocator);
-    var name = ObjStr{ .chars = "<script>" };
+    var name = ObjStr{ .chars = "<script>", .hash = 0 };
     const object = try heap.createFunction(&name);
     const function = object;
 
