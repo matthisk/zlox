@@ -1,0 +1,237 @@
+// Conway's Game of Life, rendered as an animation of PPM (P3) frames.
+//
+// Frames are written to .zig-cache/zlox_life_000.ppm, _001.ppm, ...
+// Turn them into a GIF with, for example:
+//   ffmpeg -framerate 15 -i .zig-cache/zlox_life_%03d.ppm output/game_of_life.gif
+
+var COLS = 160;
+var ROWS = 90;
+var CELL = 4;         // pixels per cell, including the 1 pixel gap
+var GENERATIONS = 960;
+var FRAME_EVERY = 4;  // write a frame every N generations
+var MAX_AGE = 40;     // ages above this all get the "old" color
+var TRAIL_LEN = 12;   // how many generations a ghost trail lasts
+var SEED = 1337;      // change this for a different random soup
+
+var NEWLINE = "
+";
+
+// --- Random numbers --------------------------------------------------------
+
+// Park-Miller "minimal standard" generator. Lox has no % operator, so the
+// modulo is written with floor. All intermediate values stay below 2^53, so
+// they are exact in a double.
+var seed = SEED;
+fun rand() {
+  seed = seed * 16807;
+  seed = seed - floor(seed / 2147483647) * 2147483647;
+  return seed / 2147483647;
+}
+
+// --- Colors ----------------------------------------------------------------
+
+fun rgb(r, g, b) {
+  return str(floor(r)) + " " + str(floor(g)) + " " + str(floor(b));
+}
+
+fun lerp(a, b, t) { return a + (b - a) * t; }
+
+var BACKGROUND = [8, 8, 20];
+var GAP = rgb(3, 3, 8);
+
+// Color stops for the age gradient: [age, r, g, b].
+var AGE_STOPS = [
+  [1, 255, 255, 255], // newborn: white flash
+  [2, 120, 240, 255], // cyan
+  [5, 80, 255, 140],  // green
+  [12, 255, 220, 60], // yellow
+  [25, 255, 110, 40], // orange
+  [40, 200, 40, 120]  // magenta: old, usually part of a still life
+];
+
+// Finds the two stops around `age` and blends between them.
+fun ageColor(age) {
+  for (var i = 0; i < AGE_STOPS.len() - 1; i = i + 1) {
+    var a = AGE_STOPS.get(i);
+    var b = AGE_STOPS.get(i + 1);
+    if (age <= b.get(0)) {
+      var t = (age - a.get(0)) / (b.get(0) - a.get(0));
+      return rgb(lerp(a.get(1), b.get(1), t), lerp(a.get(2), b.get(2), t), lerp(a.get(3), b.get(3), t));
+    }
+  }
+  var last = AGE_STOPS.get(AGE_STOPS.len() - 1);
+  return rgb(last.get(1), last.get(2), last.get(3));
+}
+
+// Building color strings is slow, so do it once up front: index by age (or
+// by remaining trail length) and look the string up while rendering.
+var AGE_COLORS = [nil];
+for (var a = 1; a <= MAX_AGE; a = a + 1) AGE_COLORS.push(ageColor(a));
+
+var GHOST = [40, 70, 190];
+var TRAIL_COLORS = [];
+for (var i = 0; i <= TRAIL_LEN; i = i + 1) {
+  var t = i / TRAIL_LEN;
+  t = t * t; // fade out quickly at first, then linger
+  TRAIL_COLORS.push(rgb(
+    lerp(BACKGROUND.get(0), GHOST.get(0), t),
+    lerp(BACKGROUND.get(1), GHOST.get(1), t),
+    lerp(BACKGROUND.get(2), GHOST.get(2), t)));
+}
+
+// --- Board -----------------------------------------------------------------
+
+// The board is stored as flat arrays indexed by row * COLS + col.
+//   alive: 1 or 0, used for counting neighbours
+//   age:   generations this cell has been alive (0 = dead)
+//   trail: generations of ghost trail remaining for a dead cell
+fun filled(n, v) {
+  var a = [];
+  for (var i = 0; i < n; i = i + 1) a.push(v);
+  return a;
+}
+
+var alive = filled(COLS * ROWS, 0);
+var next = filled(COLS * ROWS, 0);
+var age = filled(COLS * ROWS, 0);
+var trail = filled(COLS * ROWS, 0);
+
+fun spawn(col, row) {
+  var i = row * COLS + col;
+  alive.set(i, 1);
+  age.set(i, 1);
+}
+
+// Places a pattern given as a flat list of [x, y, x, y, ...] offsets.
+fun place(cells, col, row) {
+  for (var i = 0; i < cells.len(); i = i + 2) {
+    spawn(col + cells.get(i), row + cells.get(i + 1));
+  }
+}
+
+// Gosper glider gun: shoots a new glider every 30 generations.
+var GLIDER_GUN = [
+  24, 0,
+  22, 1, 24, 1,
+  12, 2, 13, 2, 20, 2, 21, 2, 34, 2, 35, 2,
+  11, 3, 15, 3, 20, 3, 21, 3, 34, 3, 35, 3,
+  0, 4, 1, 4, 10, 4, 16, 4, 20, 4, 21, 4,
+  0, 5, 1, 5, 10, 5, 14, 5, 16, 5, 17, 5, 22, 5, 24, 5,
+  10, 6, 16, 6, 24, 6,
+  11, 7, 15, 7,
+  12, 8, 13, 8
+];
+
+// Acorn: 7 cells that take over 5000 generations to settle down.
+var ACORN = [1, 0, 3, 1, 0, 2, 1, 2, 4, 2, 5, 2, 6, 2];
+
+place(GLIDER_GUN, 4, 4);
+place(ACORN, 40, 65);
+
+// A random soup on the right side of the board.
+for (var row = 20; row < 70; row = row + 1) {
+  for (var col = 100; col < 150; col = col + 1) {
+    if (rand() < 0.35) spawn(col, row);
+  }
+}
+
+// --- Simulation ------------------------------------------------------------
+
+fun step() {
+  for (var row = 0; row < ROWS; row = row + 1) {
+    // Wrap around the edges instead of using a modulo per cell.
+    var up = row - 1;
+    if (up < 0) up = ROWS - 1;
+    var down = row + 1;
+    if (down == ROWS) down = 0;
+    up = up * COLS;
+    down = down * COLS;
+    var mid = row * COLS;
+
+    for (var col = 0; col < COLS; col = col + 1) {
+      var left = col - 1;
+      if (left < 0) left = COLS - 1;
+      var right = col + 1;
+      if (right == COLS) right = 0;
+
+      var n = alive.get(up + left) + alive.get(up + col) + alive.get(up + right)
+        + alive.get(mid + left) + alive.get(mid + right)
+        + alive.get(down + left) + alive.get(down + col) + alive.get(down + right);
+
+      var i = mid + col;
+      if (alive.get(i) == 1) {
+        if (n == 2 or n == 3) {
+          next.set(i, 1);
+          if (age.get(i) < MAX_AGE) age.set(i, age.get(i) + 1);
+        } else {
+          next.set(i, 0); // dies: start a ghost trail
+          age.set(i, 0);
+          trail.set(i, TRAIL_LEN);
+        }
+      } else if (n == 3) {
+        next.set(i, 1); // born
+        age.set(i, 1);
+        trail.set(i, 0);
+      } else {
+        next.set(i, 0);
+        if (trail.get(i) > 0) trail.set(i, trail.get(i) - 1);
+      }
+    }
+  }
+
+  // Only `alive` is read while counting, so age and trail could be updated in
+  // place. `alive` itself needs a second buffer; swap them.
+  var tmp = alive;
+  alive = next;
+  next = tmp;
+}
+
+// --- Rendering -------------------------------------------------------------
+
+var WIDTH = COLS * CELL;
+var HEIGHT = ROWS * CELL;
+
+// The gap row at the bottom of each cell is the same every time.
+var gapPixels = filled(WIDTH, GAP);
+var GAP_ROW = gapPixels.join(NEWLINE);
+
+fun render(path) {
+  var lines = ["P3", str(WIDTH) + " " + str(HEIGHT), "255"];
+  for (var row = 0; row < ROWS; row = row + 1) {
+    // Build one row of pixels, then repeat it for each pixel row of the cell.
+    var pixels = [];
+    for (var col = 0; col < COLS; col = col + 1) {
+      var i = row * COLS + col;
+      var color;
+      if (age.get(i) > 0) {
+        color = AGE_COLORS.get(age.get(i));
+      } else {
+        color = TRAIL_COLORS.get(trail.get(i));
+      }
+      for (var k = 1; k < CELL; k = k + 1) pixels.push(color);
+      pixels.push(GAP);
+    }
+    var line = pixels.join(NEWLINE);
+    for (var k = 1; k < CELL; k = k + 1) lines.push(line);
+    lines.push(GAP_ROW);
+  }
+  writeFile(path, lines.join(NEWLINE) + NEWLINE);
+}
+
+fun pad3(n) {
+  if (n < 10) return "00" + str(n);
+  if (n < 100) return "0" + str(n);
+  return str(n);
+}
+
+var start = clock();
+var frame = 0;
+for (var gen = 0; gen <= GENERATIONS; gen = gen + 1) {
+  if (gen / FRAME_EVERY == floor(gen / FRAME_EVERY)) {
+    render(".zig-cache/zlox_life_" + pad3(frame) + ".ppm");
+    frame = frame + 1;
+  }
+  step();
+}
+
+print "Wrote " + str(frame) + " frames in " + str(clock() - start) + " ms"; // clock() is in milliseconds

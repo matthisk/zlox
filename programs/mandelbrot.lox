@@ -1,0 +1,101 @@
+// Renders the Mandelbrot set to a plain-text PPM (P3) image.
+// Every line of the file is collected in an array first, and then the
+// whole array is joined and written to disk in one go.
+
+var WIDTH = 1920;
+var HEIGHT = 1080;
+var MAX_ITER = 500;
+
+// Region of the complex plane to render. The height is derived from the
+// width so the image keeps the right aspect ratio (no stretching).
+var CENTER_X = -0.75;
+var CENTER_Y = 0;
+var VIEW_WIDTH = 3.5;
+var VIEW_HEIGHT = VIEW_WIDTH * HEIGHT / WIDTH;
+var X_MIN = CENTER_X - VIEW_WIDTH / 2;
+var Y_MIN = CENTER_Y - VIEW_HEIGHT / 2;
+
+// A large escape radius (256^2) makes the smooth coloring below accurate.
+var ESCAPE = 256 * 256;
+
+// Color palette: the gradient cycles through these stops every PERIOD
+// iterations, so the fine filaments near the edge get many colors.
+var PERIOD = 24;
+var PALETTE_R = [0, 32, 237, 255, 120, 0];
+var PALETTE_G = [7, 107, 255, 170, 20, 2];
+var PALETTE_B = [100, 203, 255, 0, 90, 0];
+var STOPS = PALETTE_R.len();
+
+// Lox strings have no escape sequences, so a newline is a literal line break.
+var NEWLINE = "
+";
+
+// Base-2 logarithm, since there is no log native. First shift x into
+// [1, 2) to get the integer part, then square repeatedly: every time the
+// value reaches 2 we have found another binary digit of the fraction.
+fun log2(x) {
+  var result = 0;
+  while (x >= 2) { x = x / 2; result = result + 1; }
+  while (x < 1) { x = x * 2; result = result - 1; }
+  var bit = 0.5;
+  for (var i = 0; i < 12; i = i + 1) {
+    x = x * x;
+    if (x >= 2) { x = x / 2; result = result + bit; }
+    bit = bit / 2;
+  }
+  return result;
+}
+
+// Iterates z = z^2 + c. Returns -1 for points inside the set, otherwise a
+// "smooth" (fractional) iteration count, so colors blend instead of banding:
+//   n + 1 - log2(log2(|z|))
+fun mandelbrot(cr, ci) {
+  var zr = 0;
+  var zi = 0;
+  for (var i = 0; i < MAX_ITER; i = i + 1) {
+    var r2 = zr * zr;
+    var i2 = zi * zi;
+    if (r2 + i2 > ESCAPE) return i + 1 - log2(log2(r2 + i2) / 2);
+    zi = 2 * zr * zi + ci;
+    zr = r2 - i2 + cr;
+  }
+  return -1;
+}
+
+// Linear interpolation between two palette channel values.
+fun lerp(a, b, f) {
+  return floor(a + (b - a) * f);
+}
+
+// Map a smooth iteration count to an "r g b" string.
+fun color(n) {
+  var t = n / PERIOD;
+  t = t - floor(t); // keep only the fraction, so the palette repeats
+  var pos = t * STOPS;
+  var i = floor(pos);
+  var f = pos - i;
+  if (i >= STOPS) i = STOPS - 1; // guard against float rounding when t ~ 1
+  var j = i + 1;
+  if (j == STOPS) j = 0; // wrap around to the first stop
+  return str(lerp(PALETTE_R.get(i), PALETTE_R.get(j), f)) + " " +
+    str(lerp(PALETTE_G.get(i), PALETTE_G.get(j), f)) + " " +
+    str(lerp(PALETTE_B.get(i), PALETTE_B.get(j), f));
+}
+
+// Header: magic number, width height, max color value.
+var lines = ["P3", str(WIDTH) + " " + str(HEIGHT), "255"];
+
+for (var y = 0; y < HEIGHT; y = y + 1) {
+  var ci = Y_MIN + VIEW_HEIGHT * y / HEIGHT;
+  for (var x = 0; x < WIDTH; x = x + 1) {
+    var cr = X_MIN + VIEW_WIDTH * x / WIDTH;
+    var n = mandelbrot(cr, ci);
+    if (n < 0) {
+      lines.push("0 0 0"); // inside the set: black
+    } else {
+      lines.push(color(n));
+    }
+  }
+}
+
+writeFile(".zig-cache/zlox_mandelbrot_sample.ppm", lines.join(NEWLINE) + NEWLINE);
