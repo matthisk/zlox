@@ -274,6 +274,10 @@ pub const Obj = struct {
 
     pub const Kind = enum { str, function, native, closure, upvalue, array, class, instance, bound_method };
 
+    pub fn as(self: *Obj, T: type) T {
+        return @fieldParentPtr("obj", self);
+    }
+
     pub fn mark(self: *Obj) void {
         self.marked = true;
     }

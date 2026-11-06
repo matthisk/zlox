@@ -243,7 +243,7 @@ pub const Compiler = struct {
             var currentObj = self.vm.heap.objects;
             while (currentObj != null) {
                 if (currentObj.?.kind == .function) {
-                    const func: *ObjFunction = @fieldParentPtr("obj", currentObj.?);
+                    const func: *ObjFunction = currentObj.?.as(*ObjFunction);
                     std.debug.print("\n", .{});
                     func.chunk.disassemble(func.name.chars);
                 }

@@ -91,8 +91,7 @@ pub const Heap = struct {
         var object = self.objects;
         while (object) |current| : (object = current.next) {
             if (current.kind == .str and !current.marked) {
-                const string: *ObjStr = @fieldParentPtr("obj", current);
-                _ = self.strings.remove(string.chars);
+                _ = self.strings.remove(current.as(*ObjStr).chars);
             }
         }
 
@@ -171,31 +170,31 @@ pub const Heap = struct {
 
         switch (obj.kind) {
             .function => {
-                const function: *ObjFunction = @fieldParentPtr("obj", obj);
+                const function: *ObjFunction = obj.as(*ObjFunction);
                 try self.markObj(&function.name.obj);
                 for (function.chunk.data.items) |constant| {
                     try self.markValue(constant);
                 }
             },
             .closure => {
-                const closure: *ObjClosure = @fieldParentPtr("obj", obj);
+                const closure: *ObjClosure = obj.as(*ObjClosure);
                 try self.markObj(&closure.function.obj);
                 for (closure.upvalues[0..closure.initializedUpvalueCount]) |upvalue| {
                     try self.markObj(&upvalue.obj);
                 }
             },
             .upvalue => {
-                const upvalue: *ObjUpvalue = @fieldParentPtr("obj", obj);
+                const upvalue: *ObjUpvalue = obj.as(*ObjUpvalue);
                 try self.markValue(upvalue.closed);
             },
             .array => {
-                const array: *ObjArray = @fieldParentPtr("obj", obj);
+                const array: *ObjArray = obj.as(*ObjArray);
                 for (array.values.items) |value| {
                     try self.markValue(value);
                 }
             },
             .class => {
-                const class: *ObjClass = @fieldParentPtr("obj", obj);
+                const class: *ObjClass = obj.as(*ObjClass);
                 try self.markObj(&class.name.obj);
                 var it = class.methods.iterator();
                 while (it.next()) |entry| {
@@ -204,7 +203,7 @@ pub const Heap = struct {
                 }
             },
             .instance => {
-                const instance: *ObjInstance = @fieldParentPtr("obj", obj);
+                const instance: *ObjInstance = obj.as(*ObjInstance);
                 try self.markObj(&instance.class.obj);
                 var fields = instance.fields.iterator();
                 while (fields.next()) |entry| {
@@ -213,7 +212,7 @@ pub const Heap = struct {
                 }
             },
             .bound_method => {
-                const bound: *ObjBoundMethod = @fieldParentPtr("obj", obj);
+                const bound: *ObjBoundMethod = obj.as(*ObjBoundMethod);
                 try self.markValue(bound.receiver);
                 try self.markValue(bound.method);
             },
