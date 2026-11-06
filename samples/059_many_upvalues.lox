@@ -1,0 +1,4 @@
+fun outer() { var x = 1;
+  fun inner() { return x + x + x + x + x + x + x + x + x; }
+  return inner; }
+print outer()();

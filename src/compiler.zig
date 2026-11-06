@@ -851,8 +851,8 @@ pub const Compiler = struct {
             return try self.addUpvalue(local, true);
         }
 
-        if (try self.enclosing.?.resolveUpvalue(name)) |upvalue| {
-            return try self.addUpvalue(upvalue, false);
+        if (try self.enclosing.?.resolveUpvalue(name)) |index| {
+            return try self.addUpvalue(index, false);
         }
 
         return null;
@@ -864,6 +864,11 @@ pub const Compiler = struct {
         if (upvalueCount == UINT8_COUNT) {
             self.errorAtCurrent("Too many upvalues in closure.");
             return CompilerError.TooManyUpvalues;
+        }
+
+        for (0..upvalueCount) |i| {
+            const upvalue = self.upvalues[i];
+            if (upvalue.isLocal == isLocal and upvalue.index == index) return @intCast(i);
         }
 
         self.upvalues[upvalueCount].isLocal = isLocal;
