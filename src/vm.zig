@@ -6,6 +6,7 @@ const value = @import("value.zig");
 const Chunk = chunk_mod.Chunk;
 const OpCode = chunk_mod.OpCode;
 const Value = value.Value;
+const HashMap = value.HashMap;
 const ObjStr = value.ObjStr;
 const ObjFunction = value.ObjFunction;
 const ObjClosure = value.ObjClosure;
@@ -127,12 +128,13 @@ test "fixed stack preserves captured slots and rejects overflow" {
     try std.testing.expectEqual(@as(usize, 0), stack.len);
 }
 
+
 pub const VM = struct {
     io: std.Io,
     allocator: std.mem.Allocator,
     stack: Stack,
     heap: Heap,
-    globals: std.AutoHashMap(*ObjStr, Value),
+    globals: HashMap,
     frames: [FRAMES_MAX]CallFrame = undefined,
     frameCount: usize,
     openUpvalues: ?*ObjUpvalue = null,
@@ -153,7 +155,7 @@ pub const VM = struct {
             .allocator = allocator,
             .stack = .{},
             .heap = try Heap.init(allocator),
-            .globals = std.AutoHashMap(*ObjStr, Value).init(allocator),
+            .globals = HashMap.init(allocator),
             .frameCount = 0,
         };
         errdefer vm.deinit();

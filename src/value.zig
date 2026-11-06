@@ -5,6 +5,17 @@ const Chunk = @import("chunk.zig").Chunk;
 const DEBUG_STRING_LIMIT = 40;
 const DEBUG_GC = @import("config").debug_gc;
 
+const ObjStrContext = struct {
+    pub fn hash(_: ObjStrContext, key: *ObjStr) u64 {
+        return key.hash;
+    }
+    pub fn eql(_: ObjStrContext, a: *ObjStr, b: *ObjStr) bool {
+        return a == b;
+    }
+};
+
+pub const HashMap = std.HashMap(*ObjStr, Value, ObjStrContext, std.hash_map.default_max_load_percentage);
+
 /// `args[0]` is stack slot 0 of the call: the receiver (`this`) for a method call,
 /// or the native function itself for a plain call. The arguments follow at `args[1..]`.
 pub const NativeFn = *const fn (vm: *VM, argCount: usize, args: []const Value) anyerror!Value;
@@ -32,13 +43,13 @@ pub const ObjClass = struct {
     obj: Obj = .{ .kind = .class },
     name: *ObjStr,
     /// Either a `.closure` (methods written in Lox) or a `.native` (methods written in Zig).
-    methods: std.AutoHashMap(*ObjStr, Value),
+    methods: HashMap,
 };
 
 pub const ObjInstance = struct {
     obj: Obj = .{ .kind = .instance },
     class: *ObjClass,
-    fields: std.AutoHashMap(*ObjStr, Value),
+    fields: HashMap,
 };
 
 pub const ObjBoundMethod = struct {
@@ -213,6 +224,7 @@ pub const Obj = struct {
 pub const ObjStr = struct {
     obj: Obj = .{ .kind = .str },
     chars: []const u8,
+    hash: u64, // pre computed hash.
 };
 
 pub inline fn boolValue(b: bool) Value {

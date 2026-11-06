@@ -6,6 +6,7 @@ const Compiler = @import("compiler.zig").Compiler;
 const TrackingAllocator = @import("tracking_allocator.zig").TrackingAllocator;
 
 const Value = value_mod.Value;
+const HashMap = value_mod.HashMap;
 const Obj = value_mod.Obj;
 const ObjFunction = value_mod.ObjFunction;
 const ObjNative = value_mod.ObjNative;
@@ -275,7 +276,7 @@ pub const Heap = struct {
 
         const class = try self.allocator.create(ObjClass);
         errdefer self.allocator.destroy(class);
-        const methods = std.AutoHashMap(*ObjStr, Value).init(self.allocator);
+        const methods = HashMap.init(self.allocator);
         errdefer methods.deinit();
 
         class.* = .{ .name = name, .methods = methods };
@@ -296,7 +297,7 @@ pub const Heap = struct {
         const instance = try self.allocator.create(ObjInstance);
         instance.* = .{
             .class = class,
-            .fields = std.AutoHashMap(*ObjStr, Value).init(self.allocator),
+            .fields = HashMap.init(self.allocator),
         };
 
         self.register(&instance.obj);
@@ -420,6 +421,7 @@ pub const Heap = struct {
         };
         object.* = .{
             .chars = chars,
+            .hash = std.hash.Wyhash.hash(0, chars),
         };
         errdefer object.obj.destroy(self.allocator);
 
