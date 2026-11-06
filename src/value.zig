@@ -313,6 +313,7 @@ pub inline fn isClosure(v: Value) bool {
 
 pub const Formatter = struct {
     value: Value,
+    enclosing: ?*const Formatter = null,
 
     pub fn format(self: Formatter, writer: *std.Io.Writer) std.Io.Writer.Error!void {
         switch (self.value) {
@@ -358,7 +359,22 @@ pub const Formatter = struct {
                     else
                         i;
 
-                    try writer.print("{f}", .{Formatter{ .value = items[index] }});
+                    const value = items[index];
+
+                    // To prevent infinite recursion we need to check for cycles in an array.
+                    // I.e. var a = [1]; a.push(a); should print [1, [...]]
+                    if (isArray(value)) {
+                        var parent = self.enclosing;
+                        while (parent != null) {
+                            if (isArray(parent.?.value) and parent.?.value.array == value.array) {
+                                try writer.writeAll("[...]");
+                                return;
+                            }
+                            parent = parent.?.enclosing;
+                        }
+                    }
+
+                    try writer.print("{f}", .{Formatter{ .value = value, .enclosing = &self }});
                 }
 
                 try writer.writeAll("]");
