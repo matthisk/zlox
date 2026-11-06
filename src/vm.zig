@@ -732,6 +732,7 @@ pub const VM = struct {
             .bound_method => |bound| bound == b.bound_method,
             .array => {
                 if (a.array.values.items.len != b.array.values.items.len) return false;
+                if (a.array == b.array) return true;
                 for (0..a.array.values.items.len) |i| {
                     if (!self.valuesEqual(a.array.values.items[i], b.array.values.items[i])) return false;
                 }
