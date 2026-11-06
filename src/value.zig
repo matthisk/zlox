@@ -6,18 +6,6 @@ const DEBUG_STRING_LIMIT = 40;
 const DEBUG_GC = @import("config").debug_gc;
 const NAN_BOXING = @import("config").nan_boxing;
 
-// NaN boxing constants:
-const QNAN: u64 = 0x7ffc000000000000;
-const SIGN_BIT: u64 = 0x8000000000000000;
-
-const TAG_NIL = 1; // 01
-const TAG_FALSE = 2; // 10
-const TAG_TRUE = 3; // 11
-
-const NIL_VAL = QNAN | TAG_NIL;
-const TRUE_VAL = QNAN | TAG_TRUE;
-const FALSE_VAL = QNAN | TAG_FALSE;
-
 const ObjStrContext = struct {
     pub fn hash(_: ObjStrContext, key: *ObjStr) u64 {
         return key.hash;
@@ -33,47 +21,189 @@ pub const HashMap = std.HashMap(*ObjStr, Value, ObjStrContext, std.hash_map.defa
 /// or the native function itself for a plain call. The arguments follow at `args[1..]`.
 pub const NativeFn = *const fn (vm: *VM, argCount: usize, args: []const Value) anyerror!Value;
 
-pub const Value = if (NAN_BOXING) u64 else union(enum) {
-    bool: bool,
-    number: f64,
-    nil: void,
-    string: *ObjStr,
-    function: *ObjFunction,
-    native: *ObjNative,
-    closure: *ObjClosure,
-    array: *ObjArray,
-    class: *ObjClass,
-    instance: *ObjInstance,
-    bound_method: *ObjBoundMethod,
+/// A Lox value. There are two interchangeable representations, picked at
+/// compile time with `-Dnan-boxing`. Both only distinguish four cases:
+/// number, bool, nil and obj. Which kind of object an obj is lives in
+/// `Obj.kind`, so the object helpers (`from`, `is`, `as`) are shared.
+pub const Value = if (NAN_BOXING) NanBoxed else Tagged;
+
+/// Every value is packed into a single 64 bit word. Numbers are stored as
+/// plain doubles. Everything else hides inside the unused bits of a quiet NaN:
+///
+///   nil/bool: QNAN | tag           (tag in the lowest two bits)
+///   obj:      SIGN_BIT | QNAN | ptr (pointer in the lower 48 bits)
+pub const NanBoxed = struct {
+    bits: u64,
+
+    const QNAN: u64 = 0x7ffc000000000000;
+    const SIGN_BIT: u64 = 0x8000000000000000;
+
+    const TAG_NIL = 1; // 01
+    const TAG_FALSE = 2; // 10
+    const TAG_TRUE = 3; // 11
+
+    const NIL_BITS = QNAN | TAG_NIL;
+    const FALSE_BITS = QNAN | TAG_FALSE;
+    const TRUE_BITS = QNAN | TAG_TRUE;
+
+    pub const nil: NanBoxed = .{ .bits = NIL_BITS };
+
+    pub inline fn number(n: f64) NanBoxed {
+        return .{ .bits = @bitCast(n) };
+    }
+
+    pub inline fn boolean(b: bool) NanBoxed {
+        return .{ .bits = if (b) TRUE_BITS else FALSE_BITS };
+    }
+
+    pub inline fn fromObj(o: *Obj) NanBoxed {
+        return .{ .bits = @intFromPtr(o) | SIGN_BIT | QNAN };
+    }
+
+    pub inline fn isNumber(v: NanBoxed) bool {
+        return (v.bits & QNAN) != QNAN;
+    }
+
+    pub inline fn isBool(v: NanBoxed) bool {
+        // FALSE_BITS and TRUE_BITS only differ in the lowest bit.
+        return (v.bits | 1) == TRUE_BITS;
+    }
+
+    pub inline fn isNil(v: NanBoxed) bool {
+        return v.bits == NIL_BITS;
+    }
+
+    pub inline fn isObj(v: NanBoxed) bool {
+        return (v.bits & (SIGN_BIT | QNAN)) == (SIGN_BIT | QNAN);
+    }
+
+    pub inline fn asNumber(v: NanBoxed) f64 {
+        return @bitCast(v.bits);
+    }
+
+    pub inline fn asBool(v: NanBoxed) bool {
+        return v.bits == TRUE_BITS;
+    }
+
+    pub inline fn asObj(v: NanBoxed) *Obj {
+        return @ptrFromInt(v.bits & ~(SIGN_BIT | QNAN));
+    }
+
+    pub const from = ObjMethods(NanBoxed).from;
+    pub const is = ObjMethods(NanBoxed).is;
+    pub const as = ObjMethods(NanBoxed).as;
 };
 
+/// The straightforward representation: a tagged union (16 bytes).
+pub const Tagged = struct {
+    raw: union(enum) {
+        number: f64,
+        bool: bool,
+        nil: void,
+        obj: *Obj,
+    },
+
+    pub const nil: Tagged = .{ .raw = .nil };
+
+    pub inline fn number(n: f64) Tagged {
+        return .{ .raw = .{ .number = n } };
+    }
+
+    pub inline fn boolean(b: bool) Tagged {
+        return .{ .raw = .{ .bool = b } };
+    }
+
+    pub inline fn fromObj(o: *Obj) Tagged {
+        return .{ .raw = .{ .obj = o } };
+    }
+
+    pub inline fn isNumber(v: Tagged) bool {
+        return v.raw == .number;
+    }
+
+    pub inline fn isBool(v: Tagged) bool {
+        return v.raw == .bool;
+    }
+
+    pub inline fn isNil(v: Tagged) bool {
+        return v.raw == .nil;
+    }
+
+    pub inline fn isObj(v: Tagged) bool {
+        return v.raw == .obj;
+    }
+
+    pub inline fn asNumber(v: Tagged) f64 {
+        return v.raw.number;
+    }
+
+    pub inline fn asBool(v: Tagged) bool {
+        return v.raw.bool;
+    }
+
+    pub inline fn asObj(v: Tagged) *Obj {
+        return v.raw.obj;
+    }
+
+    pub const from = ObjMethods(Tagged).from;
+    pub const is = ObjMethods(Tagged).is;
+    pub const as = ObjMethods(Tagged).as;
+};
+
+/// Object helpers shared by both representations. They only rely on
+/// `fromObj`, `isObj` and `asObj`, plus the `kind` declared on each object type.
+fn ObjMethods(comptime V: type) type {
+    return struct {
+        /// Wrap a pointer to any object type, e.g. `Value.from(closure)`.
+        pub inline fn from(ptr: anytype) V {
+            return V.fromObj(&ptr.obj);
+        }
+
+        /// `v.is(ObjArray)` is true when `v` holds an array.
+        pub inline fn is(v: V, comptime T: type) bool {
+            return v.isObj() and v.asObj().kind == T.kind;
+        }
+
+        /// `v.as(ObjArray)` returns the array held by `v`.
+        pub inline fn as(v: V, comptime T: type) *T {
+            std.debug.assert(v.is(T));
+            return @fieldParentPtr("obj", v.asObj());
+        }
+    };
+}
+
 pub const ObjArray = struct {
-    obj: Obj = .{ .kind = .array },
+    pub const kind: Obj.Kind = .array;
+    obj: Obj = .{ .kind = kind },
     values: std.ArrayList(Value) = .empty,
 };
 
 pub const ObjClass = struct {
-    obj: Obj = .{ .kind = .class },
+    pub const kind: Obj.Kind = .class;
+    obj: Obj = .{ .kind = kind },
     name: *ObjStr,
-    /// Either a `.closure` (methods written in Lox) or a `.native` (methods written in Zig).
+    /// Either an `ObjClosure` (methods written in Lox) or an `ObjNative` (methods written in Zig).
     methods: HashMap,
 };
 
 pub const ObjInstance = struct {
-    obj: Obj = .{ .kind = .instance },
+    pub const kind: Obj.Kind = .instance;
+    obj: Obj = .{ .kind = kind },
     class: *ObjClass,
     fields: HashMap,
 };
 
 pub const ObjBoundMethod = struct {
-    obj: Obj = .{ .kind = .bound_method },
+    pub const kind: Obj.Kind = .bound_method;
+    obj: Obj = .{ .kind = kind },
     receiver: Value,
-    /// Either a `.closure` or a `.native`, see `ObjClass.methods`.
+    /// Either an `ObjClosure` or an `ObjNative`, see `ObjClass.methods`.
     method: Value,
 };
 
 pub const ObjClosure = struct {
-    obj: Obj = .{ .kind = .closure },
+    pub const kind: Obj.Kind = .closure;
+    obj: Obj = .{ .kind = kind },
     function: *ObjFunction,
     upvalues: []*ObjUpvalue,
     initializedUpvalueCount: usize = 0,
@@ -86,9 +216,10 @@ pub const ObjClosure = struct {
 };
 
 pub const ObjUpvalue = struct {
-    obj: Obj = .{ .kind = .upvalue },
+    pub const kind: Obj.Kind = .upvalue;
+    obj: Obj = .{ .kind = kind },
     location: *Value,
-    closed: Value = nilValue(),
+    closed: Value = .nil,
     next: ?*ObjUpvalue = null,
 };
 
@@ -101,7 +232,8 @@ pub const UpvalueDescriptor = struct {
 };
 
 pub const ObjFunction = struct {
-    obj: Obj = .{ .kind = .function },
+    pub const kind: Obj.Kind = .function;
+    obj: Obj = .{ .kind = kind },
     arity: usize,
     chunk: Chunk,
     upvalueCount: u8 = 0,
@@ -112,7 +244,7 @@ pub const ObjFunction = struct {
 
     pub fn create(allocator: std.mem.Allocator) !*ObjFunction {
         var objFn = try allocator.create(ObjFunction);
-        objFn.obj = .{ .kind = .function };
+        objFn.obj = .{ .kind = kind };
         objFn.arity = 0;
         objFn.upvalueCount = 0;
         objFn.upvalues = &.{};
@@ -128,7 +260,8 @@ pub const ObjFunction = struct {
 };
 
 pub const ObjNative = struct {
-    obj: Obj = .{ .kind = .native },
+    pub const kind: Obj.Kind = .native;
+    obj: Obj = .{ .kind = kind },
     arity: usize,
     function: NativeFn,
 };
@@ -137,7 +270,9 @@ pub const ObjNative = struct {
 pub const Obj = struct {
     next: ?*Obj = null,
     marked: bool = false,
-    kind: enum { str, function, native, closure, upvalue, array, class, instance, bound_method },
+    kind: Kind,
+
+    pub const Kind = enum { str, function, native, closure, upvalue, array, class, instance, bound_method };
 
     pub fn mark(self: *Obj) void {
         self.marked = true;
@@ -145,42 +280,11 @@ pub const Obj = struct {
 
     pub fn format(self: *Obj, writer: *std.Io.Writer) std.Io.Writer.Error!void {
         switch (self.kind) {
-            .str => {
-                const s: *ObjStr = @fieldParentPtr("obj", self);
-                try writer.print("{f}", .{Formatter{ .value = stringValue(s) }});
-            },
-            .function => {
-                const f: *ObjFunction = @fieldParentPtr("obj", self);
-                try writer.print("{f}", .{Formatter{ .value = functionValue(f) }});
-            },
-            .native => {
-                const n: *ObjNative = @fieldParentPtr("obj", self);
-                try writer.print("{f}", .{Formatter{ .value = nativeValue(n) }});
-            },
-            .closure => {
-                const o: *ObjClosure = @fieldParentPtr("obj", self);
-                try writer.print("{f}", .{Formatter{ .value = closureValue(o) }});
-            },
             .upvalue => {
                 const u: *ObjUpvalue = @fieldParentPtr("obj", self);
                 try writer.print("{f}", .{Formatter{ .value = u.closed }});
             },
-            .array => {
-                const a: *ObjArray = @fieldParentPtr("obj", self);
-                try writer.print("{f}", .{Formatter{ .value = arrayValue(a) }});
-            },
-            .class => {
-                const c: *ObjClass = @fieldParentPtr("obj", self);
-                try writer.print("{f}", .{Formatter{ .value = classValue(c) }});
-            },
-            .instance => {
-                const i: *ObjInstance = @fieldParentPtr("obj", self);
-                try writer.print("{f}", .{Formatter{ .value = instanceValue(i) }});
-            },
-            .bound_method => {
-                const b: *ObjBoundMethod = @fieldParentPtr("obj", self);
-                try writer.print("{f}", .{Formatter{ .value = boundMethodValue(b) }});
-            },
+            else => try writer.print("{f}", .{Formatter{ .value = .fromObj(self) }}),
         }
     }
 
@@ -235,335 +339,157 @@ pub const Obj = struct {
 };
 
 pub const ObjStr = struct {
-    obj: Obj = .{ .kind = .str },
+    pub const kind: Obj.Kind = .str;
+    obj: Obj = .{ .kind = kind },
     chars: []const u8,
     hash: u64, // pre computed hash.
 };
 
+// Deprecated wrappers around the `Value` methods. They keep existing call sites
+// compiling while those are migrated to the new API.
+
 pub inline fn boolValue(b: bool) Value {
-    if (comptime NAN_BOXING) {
-        return if (b) TRUE_VAL else FALSE_VAL;
-    } else {
-        return Value{ .bool = b };
-    }
+    return .boolean(b);
 }
 
 pub inline fn numberValue(n: f64) Value {
-    if (comptime NAN_BOXING) {
-        return @bitCast(n);
-    } else {
-        return Value{ .number = n };
-    }
+    return .number(n);
 }
 
 pub inline fn nilValue() Value {
-    if (comptime NAN_BOXING) {
-        return NIL_VAL;
-    } else {
-        return Value{ .nil = {} };
-    }
+    return .nil;
 }
 
 pub inline fn stringValue(s: *ObjStr) Value {
-    if (comptime NAN_BOXING) {
-        return asValue(&s.obj);
-    } else {
-        return Value{ .string = s };
-    }
+    return .from(s);
 }
 
 pub inline fn functionValue(f: *ObjFunction) Value {
-    if (comptime NAN_BOXING) {
-        return asValue(&f.obj);
-    } else {
-        return Value{ .function = f };
-    }
+    return .from(f);
 }
 
 pub inline fn nativeValue(n: *ObjNative) Value {
-    if (comptime NAN_BOXING) {
-        return asValue(&n.obj);
-    } else {
-        return Value{ .native = n };
-    }
+    return .from(n);
 }
 
 pub inline fn closureValue(c: *ObjClosure) Value {
-    if (comptime NAN_BOXING) {
-        return asValue(&c.obj);
-    } else {
-        return Value{ .closure = c };
-    }
+    return .from(c);
 }
 
 pub inline fn arrayValue(a: *ObjArray) Value {
-    if (comptime NAN_BOXING) {
-        return asValue(&a.obj);
-    } else {
-        return Value{ .array = a };
-    }
+    return .from(a);
 }
 
 pub inline fn classValue(c: *ObjClass) Value {
-    if (comptime NAN_BOXING) {
-        return asValue(&c.obj);
-    } else {
-        return Value{ .class = c };
-    }
+    return .from(c);
 }
 
 pub inline fn instanceValue(i: *ObjInstance) Value {
-    if (comptime NAN_BOXING) {
-        return asValue(&i.obj);
-    } else {
-        return Value{ .instance = i };
-    }
+    return .from(i);
 }
 
 pub inline fn boundMethodValue(b: *ObjBoundMethod) Value {
-    if (comptime NAN_BOXING) {
-        return asValue(&b.obj);
-    } else {
-        return Value{ .bound_method = b };
-    }
+    return .from(b);
+}
+
+pub inline fn asValue(o: *Obj) Value {
+    return .fromObj(o);
 }
 
 pub inline fn asNumber(v: Value) f64 {
-    if (comptime NAN_BOXING) {
-        return @bitCast(v);
-    } else {
-        return v.number;
-    }
+    return v.asNumber();
 }
 
 pub inline fn asBool(v: Value) bool {
-    if (comptime NAN_BOXING) {
-        return v == TRUE_VAL;
-    } else {
-        return v.bool;
-    }
+    return v.asBool();
+}
+
+pub inline fn asObj(v: Value) *Obj {
+    return v.asObj();
 }
 
 pub inline fn asString(v: Value) *ObjStr {
-    if (comptime NAN_BOXING) {
-        return @fieldParentPtr("obj", asObj(v));
-    } else {
-        return v.string;
-    }
-}
-
-pub inline fn asArray(v: Value) *ObjArray {
-    if (comptime NAN_BOXING) {
-        return @fieldParentPtr("obj", asObj(v));
-    } else {
-        return v.array;
-    }
-}
-
-pub inline fn asFunction(v: Value) *ObjFunction {
-    if (comptime NAN_BOXING) {
-        return @fieldParentPtr("obj", asObj(v));
-    } else {
-        return v.function;
-    }
-}
-
-pub inline fn asNative(v: Value) *ObjNative {
-    if (comptime NAN_BOXING) {
-        return @fieldParentPtr("obj", asObj(v));
-    } else {
-        return v.native;
-    }
-}
-
-pub inline fn asClosure(v: Value) *ObjClosure {
-    if (comptime NAN_BOXING) {
-        return @fieldParentPtr("obj", asObj(v));
-    } else {
-        return v.closure;
-    }
-}
-
-pub inline fn asClass(v: Value) *ObjClass {
-    if (comptime NAN_BOXING) {
-        return @fieldParentPtr("obj", asObj(v));
-    } else {
-        return v.class;
-    }
-}
-
-pub inline fn asInstance(v: Value) *ObjInstance {
-    if (comptime NAN_BOXING) {
-        return @fieldParentPtr("obj", asObj(v));
-    } else {
-        return v.instance;
-    }
-}
-
-pub inline fn asBoundMethod(v: Value) *ObjBoundMethod {
-    if (comptime NAN_BOXING) {
-        return @fieldParentPtr("obj", asObj(v));
-    } else {
-        return v.bound_method;
-    }
+    return v.as(ObjStr);
 }
 
 pub inline fn asStr(v: Value) []const u8 {
-    if (comptime NAN_BOXING) {
-        return asString(v).chars;
-    } else {
-        return v.string.chars;
-    }
+    return v.as(ObjStr).chars;
 }
 
-/// The `Obj` header of a heap allocated value. Switch on its `kind` to find out
-/// which object type it is.
-pub inline fn asObj(v: Value) *Obj {
-    if (comptime NAN_BOXING) {
-        return @ptrFromInt(v & ~(SIGN_BIT | QNAN));
-    } else {
-        return switch (v) {
-            .string => |o| &o.obj,
-            .function => |o| &o.obj,
-            .native => |o| &o.obj,
-            .closure => |o| &o.obj,
-            .array => |o| &o.obj,
-            .class => |o| &o.obj,
-            .instance => |o| &o.obj,
-            .bound_method => |o| &o.obj,
-            .bool, .number, .nil => unreachable,
-        };
-    }
+pub inline fn asArray(v: Value) *ObjArray {
+    return v.as(ObjArray);
 }
 
-pub inline fn asValue(obj: *Obj) Value {
-    if (comptime NAN_BOXING) {
-        return @intFromPtr(obj) | SIGN_BIT | QNAN;
-    } else {
-        return switch (obj.kind) {
-            .str => stringValue(@fieldParentPtr("obj", obj)),
-            .function => functionValue(@fieldParentPtr("obj", obj)),
-            .native => nativeValue(@fieldParentPtr("obj", obj)),
-            .closure => closureValue(@fieldParentPtr("obj", obj)),
-            .array => arrayValue(@fieldParentPtr("obj", obj)),
-            .class => classValue(@fieldParentPtr("obj", obj)),
-            .instance => instanceValue(@fieldParentPtr("obj", obj)),
-            .bound_method => boundMethodValue(@fieldParentPtr("obj", obj)),
-            .upvalue => unreachable,
-        };
-    }
+pub inline fn asFunction(v: Value) *ObjFunction {
+    return v.as(ObjFunction);
 }
 
-/// True for every heap allocated value, i.e. anything that is not a bool, number or nil.
+pub inline fn asNative(v: Value) *ObjNative {
+    return v.as(ObjNative);
+}
+
+pub inline fn asClosure(v: Value) *ObjClosure {
+    return v.as(ObjClosure);
+}
+
+pub inline fn asClass(v: Value) *ObjClass {
+    return v.as(ObjClass);
+}
+
+pub inline fn asInstance(v: Value) *ObjInstance {
+    return v.as(ObjInstance);
+}
+
+pub inline fn asBoundMethod(v: Value) *ObjBoundMethod {
+    return v.as(ObjBoundMethod);
+}
+
 pub inline fn isObj(v: Value) bool {
-    if (comptime NAN_BOXING) {
-        return (v & (SIGN_BIT | QNAN)) == (SIGN_BIT | QNAN);
-    } else {
-        return switch (v) {
-            .bool, .number, .nil => false,
-            else => true,
-        };
-    }
+    return v.isObj();
 }
 
 pub inline fn isNumber(v: Value) bool {
-    if (comptime NAN_BOXING) {
-        return (v & QNAN) != QNAN;
-    } else {
-        return switch (v) {
-            .number => true,
-            else => false,
-        };
-    }
-}
-
-pub inline fn isArray(v: Value) bool {
-    if (comptime NAN_BOXING) {
-        return isObj(v) and asObj(v).kind == .array;
-    } else {
-        return switch (v) {
-            .array => true,
-            else => false,
-        };
-    }
-}
-
-pub inline fn isClass(v: Value) bool {
-    if (comptime NAN_BOXING) {
-        return isObj(v) and asObj(v).kind == .class;
-    } else {
-        return v == .class;
-    }
-}
-
-pub inline fn isInstance(v: Value) bool {
-    if (comptime NAN_BOXING) {
-        return isObj(v) and asObj(v).kind == .instance;
-    } else {
-        return v == .instance;
-    }
-}
-
-pub inline fn isBoundMethod(v: Value) bool {
-    if (comptime NAN_BOXING) {
-        return isObj(v) and asObj(v).kind == .bound_method;
-    } else {
-        return v == .bound_method;
-    }
+    return v.isNumber();
 }
 
 pub inline fn isBool(v: Value) bool {
-    if (comptime NAN_BOXING) {
-        return (v | 1) == TRUE_VAL;
-    } else {
-        return switch (v) {
-            .bool => true,
-            else => false,
-        };
-    }
+    return v.isBool();
 }
 
 pub inline fn isNil(v: Value) bool {
-    if (comptime NAN_BOXING) {
-        return v == NIL_VAL;
-    } else {
-        return switch (v) {
-            .nil => true,
-            else => false,
-        };
-    }
+    return v.isNil();
 }
 
 pub inline fn isString(v: Value) bool {
-    if (comptime NAN_BOXING) {
-        return isObj(v) and asObj(v).kind == .str;
-    } else {
-        return v == .string;
-    }
+    return v.is(ObjStr);
+}
+
+pub inline fn isArray(v: Value) bool {
+    return v.is(ObjArray);
 }
 
 pub inline fn isFunction(v: Value) bool {
-    if (comptime NAN_BOXING) {
-        return isObj(v) and asObj(v).kind == .function;
-    } else {
-        return v == .function;
-    }
+    return v.is(ObjFunction);
 }
 
 pub inline fn isNative(v: Value) bool {
-    if (comptime NAN_BOXING) {
-        return isObj(v) and asObj(v).kind == .native;
-    } else {
-        return v == .native;
-    }
+    return v.is(ObjNative);
 }
 
 pub inline fn isClosure(v: Value) bool {
-    if (comptime NAN_BOXING) {
-        return isObj(v) and asObj(v).kind == .closure;
-    } else {
-        return v == .closure;
-    }
+    return v.is(ObjClosure);
+}
+
+pub inline fn isClass(v: Value) bool {
+    return v.is(ObjClass);
+}
+
+pub inline fn isInstance(v: Value) bool {
+    return v.is(ObjInstance);
+}
+
+pub inline fn isBoundMethod(v: Value) bool {
+    return v.is(ObjBoundMethod);
 }
 
 pub const Formatter = struct {
@@ -572,20 +498,20 @@ pub const Formatter = struct {
 
     pub fn format(self: Formatter, writer: *std.Io.Writer) std.Io.Writer.Error!void {
         const v = self.value;
-        if (isNumber(v)) return writer.print("{d}", .{asNumber(v)});
-        if (isBool(v)) return writer.print("{}", .{asBool(v)});
-        if (isNil(v)) return writer.writeAll("nil");
+        if (v.isNumber()) return writer.print("{d}", .{v.asNumber()});
+        if (v.isBool()) return writer.print("{}", .{v.asBool()});
+        if (v.isNil()) return writer.writeAll("nil");
 
-        switch (asObj(v).kind) {
+        switch (v.asObj().kind) {
             .str => {
-                const string = asString(v);
+                const string = v.as(ObjStr);
                 const preview_length = @min(string.chars.len, DEBUG_STRING_LIMIT);
                 const preview = string.chars[0..preview_length];
                 const ellipsis: []const u8 = if (preview_length < string.chars.len) "..." else "";
                 try writer.print("\"{f}\"{s}", .{ std.zig.fmtString(preview), ellipsis });
             },
             .closure => {
-                const c = asClosure(v);
+                const c = v.as(ObjClosure);
                 if (std.mem.eql(u8, c.function.name.chars, "<script>")) {
                     try writer.print("<c script>", .{});
                 } else {
@@ -593,7 +519,7 @@ pub const Formatter = struct {
                 }
             },
             .function => {
-                const f = asFunction(v);
+                const f = v.as(ObjFunction);
                 if (std.mem.eql(u8, f.name.chars, "<script>")) {
                     try writer.print("<f script>", .{});
                 } else {
@@ -604,7 +530,7 @@ pub const Formatter = struct {
                 try writer.print("<native>", .{});
             },
             .array => {
-                const items = asArray(v).values.items;
+                const items = v.as(ObjArray).values.items;
                 const len = items.len;
                 const truncated = len > 8;
 
@@ -619,14 +545,14 @@ pub const Formatter = struct {
                     else
                         i;
 
-                    const value = items[index];
+                    const item = items[index];
 
                     // To prevent infinite recursion we need to check for cycles in an array.
                     // I.e. var a = [1]; a.push(a); should print [1, [...]]
-                    if (isArray(value)) {
+                    if (item.is(ObjArray)) {
                         var parent = self.enclosing;
                         while (parent != null) {
-                            if (isArray(parent.?.value) and asArray(parent.?.value) == asArray(value)) {
+                            if (parent.?.value.is(ObjArray) and parent.?.value.as(ObjArray) == item.as(ObjArray)) {
                                 try writer.writeAll("[...]");
                                 return;
                             }
@@ -634,17 +560,17 @@ pub const Formatter = struct {
                         }
                     }
 
-                    try writer.print("{f}", .{Formatter{ .value = value, .enclosing = &self }});
+                    try writer.print("{f}", .{Formatter{ .value = item, .enclosing = &self }});
                 }
 
                 try writer.writeAll("]");
             },
-            .class => try writer.print("<class {s}>", .{asClass(v).name.chars}),
-            .instance => try writer.print("<{s} instance>", .{asInstance(v).class.name.chars}),
+            .class => try writer.print("<class {s}>", .{v.as(ObjClass).name.chars}),
+            .instance => try writer.print("<{s} instance>", .{v.as(ObjInstance).class.name.chars}),
             .bound_method => {
-                const method = asBoundMethod(v).method;
-                if (isClosure(method)) {
-                    try writer.print("<bound {s}>", .{asClosure(method).function.name.chars});
+                const method = v.as(ObjBoundMethod).method;
+                if (method.is(ObjClosure)) {
+                    try writer.print("<bound {s}>", .{method.as(ObjClosure).function.name.chars});
                 } else {
                     try writer.writeAll("<bound native>");
                 }
@@ -660,22 +586,22 @@ pub fn format(v: Value) Formatter {
 }
 
 pub fn write(v: Value, writer: *std.Io.Writer) std.Io.Writer.Error!void {
-    if (isNumber(v)) return writer.print("{d}", .{asNumber(v)});
-    if (isBool(v)) return writer.print("{}", .{asBool(v)});
-    if (isNil(v)) return writer.writeAll("nil");
+    if (v.isNumber()) return writer.print("{d}", .{v.asNumber()});
+    if (v.isBool()) return writer.print("{}", .{v.asBool()});
+    if (v.isNil()) return writer.writeAll("nil");
 
-    switch (asObj(v).kind) {
-        .str => try writer.writeAll(asString(v).chars),
-        .function => try writer.writeAll(asFunction(v).name.chars),
+    switch (v.asObj().kind) {
+        .str => try writer.writeAll(v.as(ObjStr).chars),
+        .function => try writer.writeAll(v.as(ObjFunction).name.chars),
         .native => try writer.writeAll("<native_fn>"),
-        .closure => try writer.writeAll(asClosure(v).function.name.chars),
+        .closure => try writer.writeAll(v.as(ObjClosure).function.name.chars),
         .array => try writer.print("{f}", .{Formatter{ .value = v }}),
-        .class => try writer.writeAll(asClass(v).name.chars),
-        .instance => try writer.print("{s} instance", .{asInstance(v).class.name.chars}),
+        .class => try writer.writeAll(v.as(ObjClass).name.chars),
+        .instance => try writer.print("{s} instance", .{v.as(ObjInstance).class.name.chars}),
         .bound_method => {
-            const method = asBoundMethod(v).method;
-            if (isClosure(method)) {
-                try writer.writeAll(asClosure(method).function.name.chars);
+            const method = v.as(ObjBoundMethod).method;
+            if (method.is(ObjClosure)) {
+                try writer.writeAll(method.as(ObjClosure).function.name.chars);
             } else {
                 try writer.writeAll("<native_fn>");
             }
@@ -684,12 +610,48 @@ pub fn write(v: Value, writer: *std.Io.Writer) std.Io.Writer.Error!void {
     }
 }
 
+// Both representations are always compiled, so they can be tested side by side
+// no matter which one the build selected.
+fn expectRepresentation(comptime V: type) !void {
+    try std.testing.expect(V.nil.isNil());
+    try std.testing.expect(!V.nil.isBool());
+    try std.testing.expect(!V.nil.isNumber());
+    try std.testing.expect(!V.nil.isObj());
+
+    const t = V.boolean(true);
+    const f = V.boolean(false);
+    try std.testing.expect(t.isBool() and f.isBool());
+    try std.testing.expect(t.asBool() and !f.asBool());
+    try std.testing.expect(!t.isNil() and !t.isNumber() and !t.isObj());
+
+    const n = V.number(-1.5);
+    try std.testing.expect(n.isNumber());
+    try std.testing.expectEqual(@as(f64, -1.5), n.asNumber());
+    try std.testing.expect(!n.isBool() and !n.isNil() and !n.isObj());
+
+    var s = ObjStr{ .chars = "hi", .hash = 0 };
+    const sv = V.from(&s);
+    try std.testing.expect(sv.isObj());
+    try std.testing.expect(!sv.isNumber() and !sv.isBool() and !sv.isNil());
+    try std.testing.expect(sv.is(ObjStr));
+    try std.testing.expect(!sv.is(ObjArray));
+    try std.testing.expectEqual(&s, sv.as(ObjStr));
+}
+
+test "nan boxed representation" {
+    try expectRepresentation(NanBoxed);
+}
+
+test "tagged representation" {
+    try expectRepresentation(Tagged);
+}
+
 test "debug formatter escapes and truncates strings" {
     var short = ObjStr{
         .chars = "hello\nworld",
         .hash = 0,
     };
-    try std.testing.expectFmt("\"hello\\nworld\"", "{f}", .{format(stringValue(&short))});
+    try std.testing.expectFmt("\"hello\\nworld\"", "{f}", .{format(.from(&short))});
 
     var long = ObjStr{
         .chars = "1234567890123456789012345678901234567890tail",
@@ -698,6 +660,6 @@ test "debug formatter escapes and truncates strings" {
     try std.testing.expectFmt(
         "\"1234567890123456789012345678901234567890\"...",
         "{f}",
-        .{format(stringValue(&long))},
+        .{format(.from(&long))},
     );
 }
