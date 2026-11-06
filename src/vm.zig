@@ -142,6 +142,10 @@ pub const VM = struct {
     stdoutIsTty: bool = true,
     stdoutBuffer: [4096]u8 = undefined,
     stdoutWriter: std.Io.File.Writer = undefined,
+    stdinBuffer: [4096]u8 = undefined,
+    /// Created on the first `readLine()` call. It must outlive a single call,
+    /// because the reader may buffer more than one line at a time.
+    stdinReader: ?std.Io.File.Reader = null,
 
     pub fn init(io: std.Io, allocator: std.mem.Allocator) !VM {
         var vm = VM{
@@ -919,7 +923,20 @@ pub const VM = struct {
 };
 
 pub fn readLineNative(vm: *VM, _: usize, _: []const Value) !Value {
-    return .{ .string = try vm.heap.copyString("hello world") };
+    // Make sure a prompt printed with `print` is visible before we block.
+    try vm.stdoutWriter.flush();
+
+    if (vm.stdinReader == null) {
+        vm.stdinReader = std.Io.File.stdin().readerStreaming(vm.io, &vm.stdinBuffer);
+    }
+    return readLineFrom(vm, &vm.stdinReader.?.interface);
+}
+
+/// Returns the next line without its line ending, or `nil` at end of input.
+fn readLineFrom(vm: *VM, reader: *std.Io.Reader) !Value {
+    const line = try reader.takeDelimiter('\n') orelse return value.nilValue();
+    // The slice points into the reader's buffer, so the string must copy it.
+    return .{ .string = try vm.heap.copyString(std.mem.trimEnd(u8, line, "\r")) };
 }
 
 pub fn writeFileNative(vm: *VM, argCount: usize, args: []const Value) !Value {
@@ -1129,6 +1146,17 @@ test "object equality compares strings by content and callables by identity" {
     try std.testing.expect(!vm.valuesEqual(.{ .native = native }, .{ .native = otherNative }));
     try std.testing.expect(!vm.valuesEqual(.{ .closure = closure }, .{ .function = function }));
     try std.testing.expect(!vm.valuesEqual(.{ .string = &a }, .nil));
+}
+
+test "readLine returns lines without line endings and nil at end of input" {
+    var vm = try VM.init(std.testing.io, std.testing.allocator);
+    defer vm.deinit();
+
+    var reader: std.Io.Reader = .fixed("first\nsecond\r\nlast");
+    try std.testing.expectEqualStrings("first", (try readLineFrom(&vm, &reader)).string.chars);
+    try std.testing.expectEqualStrings("second", (try readLineFrom(&vm, &reader)).string.chars);
+    try std.testing.expectEqualStrings("last", (try readLineFrom(&vm, &reader)).string.chars);
+    try std.testing.expect(value.isNil(try readLineFrom(&vm, &reader)));
 }
 
 test "writeFile native requires a path and contents string" {
