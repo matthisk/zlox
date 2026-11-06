@@ -4,6 +4,7 @@ const compiler_mod = @import("compiler.zig");
 const scanner_mod = @import("scanner.zig");
 const chunk_mod = @import("chunk.zig");
 const value_mod = @import("value.zig");
+const ObjStr = value_mod.ObjStr;
 
 const Scanner = scanner_mod.Scanner;
 const Compiler = compiler_mod.Compiler;
@@ -136,7 +137,7 @@ test "global operand widths at constant indices 255 and 256" {
         try std.testing.expectEqual(expected.len, seen);
         try std.testing.expectEqual(null, try vm.startScript(function));
         try std.testing.expectEqual(InterpretResult.OK, try vm.run());
-        try std.testing.expect(value_mod.asBool(vm.getGlobal("target").?));
+        try std.testing.expect(vm.getGlobal("target").?.asBool());
     }
 }
 
@@ -307,7 +308,7 @@ test "036 callable equality uses identity" {
         "sameString",
     }) |name| {
         const result = vm.getGlobal(name) orelse return error.MissingEqualityResult;
-        try std.testing.expectEqual(true, value_mod.asBool(result));
+        try std.testing.expectEqual(true, result.asBool());
     }
 }
 
@@ -352,9 +353,9 @@ test "047 floor" {
     try std.testing.expectEqual(null, try vm.startScript(function));
     try std.testing.expectEqual(InterpretResult.OK, try vm.run());
 
-    try std.testing.expectEqual(2, value_mod.asNumber(vm.getGlobal("positive").?));
-    try std.testing.expectEqual(-3, value_mod.asNumber(vm.getGlobal("negative").?));
-    try std.testing.expectEqual(5, value_mod.asNumber(vm.getGlobal("whole").?));
+    try std.testing.expectEqual(2, vm.getGlobal("positive").?.asNumber());
+    try std.testing.expectEqual(-3, vm.getGlobal("negative").?.asNumber());
+    try std.testing.expectEqual(5, vm.getGlobal("whole").?.asNumber());
 }
 
 test "048 append file" {
@@ -390,9 +391,9 @@ test "049 array methods" {
     try std.testing.expectEqual(null, try vm.startScript(function));
     try std.testing.expectEqual(InterpretResult.OK, try vm.run());
 
-    try std.testing.expectEqual(@as(f64, 3), value_mod.asNumber(vm.getGlobal("popped").?));
-    try std.testing.expectEqual(@as(f64, 3), value_mod.asNumber(vm.getGlobal("length").?));
-    try std.testing.expectEqualStrings("first", value_mod.asString(vm.getGlobal("first").?).chars);
+    try std.testing.expectEqual(@as(f64, 3), vm.getGlobal("popped").?.asNumber());
+    try std.testing.expectEqual(@as(f64, 3), vm.getGlobal("length").?.asNumber());
+    try std.testing.expectEqualStrings("first", vm.getGlobal("first").?.as(ObjStr).chars);
 }
 
 test "050 array index out of range" {
@@ -414,9 +415,9 @@ test "051 array join" {
     try std.testing.expectEqual(null, try vm.startScript(function));
     try std.testing.expectEqual(InterpretResult.OK, try vm.run());
 
-    try std.testing.expectEqualStrings("a, 1, true, nil", value_mod.asString(vm.getGlobal("joined").?).chars);
-    try std.testing.expectEqualStrings("", value_mod.asString(vm.getGlobal("empty").?).chars);
-    try std.testing.expectEqualStrings("only", value_mod.asString(vm.getGlobal("single").?).chars);
+    try std.testing.expectEqualStrings("a, 1, true, nil", vm.getGlobal("joined").?.as(ObjStr).chars);
+    try std.testing.expectEqualStrings("", vm.getGlobal("empty").?.as(ObjStr).chars);
+    try std.testing.expectEqualStrings("only", vm.getGlobal("single").?.as(ObjStr).chars);
 }
 
 test "054 keyword prefixed identifiers" {
@@ -435,7 +436,7 @@ test "054 keyword prefixed identifiers" {
 
     for ([_][]const u8{ "origin", "android", "format", "funky", "iffy", "nilly", "thistle", "variable", "classy", "defaults" }) |name| {
         const result = vm.getGlobal(name) orelse return error.MissingGlobal;
-        try std.testing.expectEqual(true, value_mod.asBool(result));
+        try std.testing.expectEqual(true, result.asBool());
     }
 }
 
@@ -455,6 +456,6 @@ test "055 super methods" {
 
     for ([_][]const u8{ "dogSpeaks", "puppySpeaks", "inheritedInit", "boundSuper", "closureSuper" }) |name| {
         const result = vm.getGlobal(name) orelse return error.MissingGlobal;
-        try std.testing.expectEqual(true, value_mod.asBool(result));
+        try std.testing.expectEqual(true, result.asBool());
     }
 }

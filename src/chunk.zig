@@ -2,6 +2,7 @@ const std = @import("std");
 const value_mod = @import("value.zig");
 const Value = value_mod.Value;
 const ObjFunction = value_mod.ObjFunction;
+const ObjStr = value_mod.ObjStr;
 
 pub const OpCode = enum(u8) {
     OP_EXTRA_ARG,
@@ -82,7 +83,7 @@ pub const Chunk = struct {
                 .OP_CLOSURE => {
                     try writer.print("{s} [{d}] {f}", .{ name, d.operand, value_mod.format(data[d.operand]) });
                     // The upvalue descriptors live on the function object, not in the bytecode.
-                    for (value_mod.asFunction(data[d.operand]).upvalues) |desc| {
+                    for (data[d.operand].as(ObjFunction).upvalues) |desc| {
                         try writer.print(" ~ upvalue {s} [{d}]", .{ if (desc.isLocal) "<local>" else "", desc.index });
                     }
                 },
@@ -184,8 +185,8 @@ pub const Chunk = struct {
 
     pub fn findValue(self: *Chunk, v: []const u8) ?u32 {
         for (self.data.items, 0..) |value, i| {
-            if (value_mod.isString(value)) {
-                const chars = value_mod.asString(value).chars;
+            if (value.is(ObjStr)) {
+                const chars = value.as(ObjStr).chars;
                 if (chars.ptr == v.ptr and chars.len == v.len) {
                     // Impossible to find a dataslot that doesn't fit a u32, as it cannot be stored.
                     return std.math.cast(u32, i) orelse unreachable;

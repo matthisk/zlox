@@ -10,7 +10,6 @@ const Scanner = scanner_mod.Scanner;
 const TokenType = scanner_mod.TokenType;
 const Token = scanner_mod.Token;
 const Value = value_mod.Value;
-const numberValue = value_mod.numberValue;
 const ObjFunction = value_mod.ObjFunction;
 const UpvalueDescriptor = value_mod.UpvalueDescriptor;
 
@@ -154,7 +153,7 @@ pub const Compiler = struct {
         else
             "<script>";
         const nameObject = try vm.heap.copyString(name);
-        try vm.pushRoot(value_mod.stringValue(nameObject));
+        try vm.pushRoot(Value.from(nameObject));
         defer vm.popRoot();
         compiler.functionObject = try vm.heap.createFunction(nameObject);
 
@@ -335,7 +334,7 @@ pub const Compiler = struct {
         // OP_CLOSURE is a plain opcode + operand instruction. The heap's allocator owns
         // them, like the rest of the function, and `ObjFunction.destroy` frees them.
         functionObject.upvalues = try self.vm.heap.allocator.dupe(UpvalueDescriptor, inner.upvalues[0..functionObject.upvalueCount]);
-        try self.emitOpWithOperand(OpCode.OP_CLOSURE, try self.makeConstant(value_mod.functionValue(functionObject)));
+        try self.emitOpWithOperand(OpCode.OP_CLOSURE, try self.makeConstant(Value.from(functionObject)));
     }
 
     fn _function(self: *Compiler) !void {
@@ -679,7 +678,7 @@ pub const Compiler = struct {
             return constant.?;
         }
 
-        return try self.makeConstant(value_mod.stringValue(obj));
+        return try self.makeConstant(Value.from(obj));
     }
 
     fn defineVariable(self: *Compiler, global: u32) !void {
@@ -753,7 +752,7 @@ pub const Compiler = struct {
         // Panic in case we cannot parse float. The lexer should NEVER return unparseable lexemes.
         const value = std.fmt.parseFloat(f64, self.previous.lexeme) catch unreachable;
 
-        try self.emitConstant(numberValue(value));
+        try self.emitConstant(Value.number(value));
     }
 
     fn _super(self: *Compiler, _: bool) !void {
@@ -816,7 +815,7 @@ pub const Compiler = struct {
                 setOp = OpCode.OP_SET_UPVALUE;
             } else {
                 const internedName = try self.vm.heap.copyString(name);
-                arg = self.currentChunk().findValue(internedName.chars) orelse try self.makeConstant(value_mod.stringValue(internedName));
+                arg = self.currentChunk().findValue(internedName.chars) orelse try self.makeConstant(Value.from(internedName));
                 getOp = OpCode.OP_GET_GLOBAL;
                 setOp = OpCode.OP_SET_GLOBAL;
             }
@@ -882,7 +881,7 @@ pub const Compiler = struct {
     fn string(self: *Compiler, _: bool) !void {
         const input = self.previous.lexeme[1 .. self.previous.lexeme.len - 1];
         const object = try self.vm.heap.copyString(input);
-        try self.emitConstant(value_mod.stringValue(object));
+        try self.emitConstant(Value.from(object));
     }
 
     fn grouping(self: *Compiler, _: bool) !void {
