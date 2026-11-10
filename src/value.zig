@@ -3,7 +3,6 @@ const VM = @import("vm.zig").VM;
 const Chunk = @import("chunk.zig").Chunk;
 
 const DEBUG_STRING_LIMIT = 40;
-const DEBUG_GC = @import("config").debug_gc;
 const NAN_BOXING = @import("config").nan_boxing;
 
 const ObjStrContext = struct {
@@ -289,9 +288,6 @@ pub const Obj = struct {
     }
 
     pub fn destroy(self: *Obj, allocator: std.mem.Allocator) void {
-        if (comptime DEBUG_GC) {
-            std.debug.print("{*} free type {s}\n", .{ self, @tagName(self.kind) });
-        }
         switch (self.kind) {
             .str => {
                 const s: *ObjStr = @fieldParentPtr("obj", self);

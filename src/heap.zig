@@ -17,9 +17,24 @@ const ObjArray = value_mod.ObjArray;
 const ObjClass = value_mod.ObjClass;
 const ObjInstance = value_mod.ObjInstance;
 const ObjBoundMethod = value_mod.ObjBoundMethod;
+const UpvalueDescriptor = value_mod.UpvalueDescriptor;
 
 const DEBUG_GC = config.debug_gc;
 const INITIAL_GC_THRESHOLD = 1024 * 1024;
+
+/// Object counts per kind, used by the `debug-gc` report.
+const KindCounts = std.EnumArray(Obj.Kind, usize);
+
+/// Aggregated numbers for the `debug-gc` report. Printing one line per
+/// allocation floods the console, so we count instead and print a single
+/// summary per collection.
+const GcStats = struct {
+    collections: usize = 0,
+    /// Objects registered since the previous collection ended.
+    allocated: KindCounts = .initFill(0),
+    /// Objects freed by the current collection's sweep.
+    freed: KindCounts = .initFill(0),
+};
 
 /// Owns heap allocated runtime objects and their linked list.
 ///
@@ -32,6 +47,7 @@ pub const Heap = struct {
     strings: std.StringHashMap(*ObjStr),
     grayStack: std.ArrayList(*Obj),
     compiler: ?*Compiler = null,
+    gcStats: GcStats = .{},
 
     pub fn init(childAllocator: std.mem.Allocator) !Heap {
         // Allocator interfaces point at their implementation state. Keeping
@@ -84,24 +100,90 @@ pub const Heap = struct {
     pub fn collectGarbage(self: *Heap, vm: *VM) !void {
         const bytesBefore = self.trackingAllocator.bytesAllocated;
 
-        if (comptime DEBUG_GC) {
-            std.debug.print("-- gc begin\n", .{});
-        }
-
         try self.markRoots(vm);
         try self.markObj(&vm.initString.obj);
         try self.markObj(&vm.arrayClass.obj);
         try self.traceReferences();
         self.removeWhiteInternedStrings();
         self.sweep();
-        self.trackingAllocator.threshold = std.math.mul(usize, self.trackingAllocator.bytesAllocated, 2) catch std.math.maxInt(usize);
+        self.trackingAllocator.threshold = @max(std.math.mul(usize, self.trackingAllocator.bytesAllocated, 2) catch std.math.maxInt(usize), INITIAL_GC_THRESHOLD);
 
         if (comptime DEBUG_GC) {
-            const bytesAfter = self.trackingAllocator.bytesAllocated;
-            const bytesFreed = bytesBefore -| bytesAfter;
-            const bytesUntilNextGC = self.trackingAllocator.threshold -| bytesAfter;
-            std.debug.print("-- gc end: freed {d} bytes, {d} bytes until next collection\n", .{ bytesFreed, bytesUntilNextGC });
+            self.printGcReport(bytesBefore);
         }
+    }
+
+    /// Print one summary block for the collection that just finished.
+    fn printGcReport(self: *Heap, bytesBefore: usize) void {
+        const stats = &self.gcStats;
+        stats.collections += 1;
+
+        // After the sweep every object left in the list survived.
+        var live: KindCounts = .initFill(0);
+        var liveBytes: KindCounts = .initFill(0);
+        var objectBytesTotal: usize = 0;
+        var object = self.objects;
+        while (object) |current| : (object = current.next) {
+            const bytes = objectBytes(current);
+            live.getPtr(current.kind).* += 1;
+            liveBytes.getPtr(current.kind).* += bytes;
+            objectBytesTotal += bytes;
+        }
+
+        const bytesAfter = self.trackingAllocator.bytesAllocated;
+        const bytesFreed = bytesBefore -| bytesAfter;
+        const percentFreed = if (bytesBefore == 0) 0 else @as(f64, @floatFromInt(bytesFreed)) * 100 / @as(f64, @floatFromInt(bytesBefore));
+
+        std.debug.print("\n== gc #{d} ==========================================\n", .{stats.collections});
+        std.debug.print("  heap before: {Bi:.1}\n", .{bytesBefore});
+        std.debug.print("  freed:       {Bi:.1} ({d:.0}%)\n", .{ bytesFreed, percentFreed });
+        std.debug.print("  heap after:  {Bi:.1}\n", .{bytesAfter});
+        std.debug.print("  next gc at:  {Bi:.1}\n\n", .{self.trackingAllocator.threshold});
+        std.debug.print("  {s:<14}{s:>12}{s:>12}{s:>12}{s:>14}\n", .{ "objects", "allocated", "freed", "live", "live bytes" });
+        for (std.enums.values(Obj.Kind)) |kind| {
+            const allocated = stats.allocated.get(kind);
+            const freed = stats.freed.get(kind);
+            if (allocated == 0 and freed == 0 and live.get(kind) == 0) continue;
+            std.debug.print("  {s:<14}{d:>12}{d:>12}{d:>12}{Bi:>14.1}\n", .{ @tagName(kind), allocated, freed, live.get(kind), liveBytes.get(kind) });
+        }
+        // Memory the heap's allocator handed out that no object owns, such
+        // as the string intern table.
+        std.debug.print("  {s:<50}{Bi:>14.1}\n", .{ "not owned by an object (e.g. intern table)", bytesAfter -| objectBytesTotal });
+        std.debug.print("====================================================\n\n", .{});
+
+        stats.allocated = .initFill(0);
+        stats.freed = .initFill(0);
+    }
+
+    /// Bytes an object owns: its own struct plus the buffers it points to.
+    /// Used only by the `debug-gc` report.
+    fn objectBytes(obj: *Obj) usize {
+        const value = Value.fromObj(obj);
+        return switch (obj.kind) {
+            .str => @sizeOf(ObjStr) + value.as(ObjStr).chars.len,
+            .function => blk: {
+                const function = value.as(ObjFunction);
+                break :blk @sizeOf(ObjFunction) +
+                    function.chunk.code.capacity * @sizeOf(u8) +
+                    function.chunk.data.capacity * @sizeOf(Value) +
+                    function.chunk.lines.capacity * @sizeOf(usize) +
+                    function.upvalues.len * @sizeOf(UpvalueDescriptor);
+            },
+            .native => @sizeOf(ObjNative),
+            .closure => @sizeOf(ObjClosure) + value.as(ObjClosure).upvalues.len * @sizeOf(*ObjUpvalue),
+            .upvalue => @sizeOf(ObjUpvalue),
+            // Capacity, not length: the ArrayList reserves room to grow.
+            .array => @sizeOf(ObjArray) + value.as(ObjArray).values.capacity * @sizeOf(Value),
+            .class => @sizeOf(ObjClass) + hashMapBytes(value.as(ObjClass).methods),
+            .instance => @sizeOf(ObjInstance) + hashMapBytes(value.as(ObjInstance).fields),
+            .bound_method => @sizeOf(ObjBoundMethod),
+        };
+    }
+
+    /// Approximate: each slot holds one metadata byte, a key and a value.
+    /// The real allocation also has a small header and alignment padding.
+    fn hashMapBytes(map: HashMap) usize {
+        return map.capacity() * (1 + @sizeOf(*ObjStr) + @sizeOf(Value));
     }
 
     pub fn removeWhiteInternedStrings(self: *Heap) void {
@@ -136,6 +218,7 @@ pub const Heap = struct {
                     previous.?.next = object;
                 }
 
+                if (comptime DEBUG_GC) self.gcStats.freed.getPtr(unreached.?.kind).* += 1;
                 unreached.?.destroy(self.allocator);
             }
         }
@@ -181,10 +264,6 @@ pub const Heap = struct {
     }
 
     pub fn blackenObj(self: *Heap, obj: *Obj) !void {
-        if (comptime DEBUG_GC) {
-            std.debug.print("{*} blacken {f}\n", .{ obj, obj });
-        }
-
         switch (obj.kind) {
             .function => {
                 const function = Value.fromObj(obj).as(ObjFunction);
@@ -246,10 +325,6 @@ pub const Heap = struct {
     pub fn markObj(self: *Heap, obj: *Obj) !void {
         if (obj.marked) return;
 
-        if (comptime DEBUG_GC) {
-            std.debug.print("{*} mark {f}\n", .{ obj, obj });
-        }
-
         obj.mark();
         try self.grayStack.append(self.childAllocator, obj);
     }
@@ -258,6 +333,7 @@ pub const Heap = struct {
     pub fn register(self: *Heap, object: *Obj) void {
         object.next = self.objects;
         self.objects = object;
+        if (comptime DEBUG_GC) self.gcStats.allocated.getPtr(object.kind).* += 1;
     }
 
     pub fn createArray(self: *Heap, len: usize) !*ObjArray {
@@ -268,10 +344,6 @@ pub const Heap = struct {
         errdefer array.values.deinit(self.allocator);
 
         self.register(&array.obj);
-
-        if (comptime DEBUG_GC) {
-            std.debug.print("{*} allocate {d} for {s}\n", .{ array, @sizeOf(ObjArray) + @sizeOf(Value) * len, "<array>" });
-        }
 
         return array;
     }
@@ -287,10 +359,6 @@ pub const Heap = struct {
 
         self.register(&class.obj);
 
-        if (comptime DEBUG_GC) {
-            std.debug.print("{*} allocate {d} for {s}\n", .{ class, @sizeOf(ObjClass), "<class>" });
-        }
-
         return class;
     }
 
@@ -304,10 +372,6 @@ pub const Heap = struct {
 
         self.register(&instance.obj);
 
-        if (comptime DEBUG_GC) {
-            std.debug.print("{*} allocate {d} for {s}\n", .{ instance, @sizeOf(ObjInstance), "<instance>" });
-        }
-
         return instance;
     }
 
@@ -318,10 +382,6 @@ pub const Heap = struct {
         bound.* = .{ .receiver = receiver, .method = method };
 
         self.register(&bound.obj);
-
-        if (comptime DEBUG_GC) {
-            std.debug.print("{*} allocate {d} for {s}\n", .{ bound, @sizeOf(ObjBoundMethod), "<bound method>" });
-        }
 
         return bound;
     }
@@ -335,10 +395,6 @@ pub const Heap = struct {
 
         self.register(&function.obj);
 
-        if (comptime DEBUG_GC) {
-            std.debug.print("{*} allocate {d} for {s}\n", .{ function, @sizeOf(ObjFunction), "<function>" });
-        }
-
         return function;
     }
 
@@ -348,10 +404,6 @@ pub const Heap = struct {
         native.* = .{ .function = fun, .arity = arity };
 
         self.register(&native.obj);
-
-        if (comptime DEBUG_GC) {
-            std.debug.print("{*} allocate {d} for {s}\n", .{ native, @sizeOf(ObjNative), "<native>" });
-        }
 
         return native;
     }
@@ -367,10 +419,6 @@ pub const Heap = struct {
         errdefer self.allocator.free(closure.upvalues);
 
         self.register(&closure.obj);
-
-        if (comptime DEBUG_GC) {
-            std.debug.print("{*} allocate {d} for {s}\n", .{ closure, @sizeOf(ObjClosure) + @sizeOf(*ObjUpvalue) * fun.upvalueCount, "<closure>" });
-        }
         return closure;
     }
 
@@ -379,10 +427,6 @@ pub const Heap = struct {
         errdefer self.allocator.destroy(upvalue);
         upvalue.* = .{ .location = value };
         self.register(&upvalue.obj);
-
-        if (comptime DEBUG_GC) {
-            std.debug.print("{*} allocate {d} for {s}\n", .{ upvalue, @sizeOf(ObjUpvalue), "<upvalue>" });
-        }
 
         return upvalue;
     }
@@ -417,10 +461,6 @@ pub const Heap = struct {
 
         try self.strings.put(chars, object);
         self.register(&object.obj);
-
-        if (comptime DEBUG_GC) {
-            std.debug.print("{*} allocate {d} for {s}\n", .{ object, @sizeOf(ObjStr) + @sizeOf(u8) * chars.len, "<str>" });
-        }
 
         return object;
     }
