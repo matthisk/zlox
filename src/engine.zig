@@ -16,13 +16,11 @@ pub const Engine = struct {
     allocator: std.mem.Allocator,
     vm: VM,
 
-    pub fn init(io: std.Io, allocator: std.mem.Allocator) !Engine {
-        const vm = try VM.init(io, allocator);
-        return Engine{
-            .io = io,
-            .allocator = allocator,
-            .vm = vm,
-        };
+    /// Initialise the engine in place, because it embeds the VM (see `VM.init`).
+    pub fn init(self: *Engine, io: std.Io, allocator: std.mem.Allocator) !void {
+        self.io = io;
+        self.allocator = allocator;
+        try self.vm.init(io, allocator);
     }
 
     pub fn deinit(self: *Engine) void {
@@ -89,9 +87,10 @@ fn executeTestFileWithGCThreshold(allocator: std.mem.Allocator, filename: []cons
     defer allocator.free(source);
 
     var scanner = Scanner.init(source.ptr);
-    var vm = try VM.init(std.testing.io, allocator);
+    var vm: VM = undefined;
+    try vm.init(std.testing.io, allocator);
     defer vm.deinit();
-    if (gcThreshold) |threshold| vm.heap.nextGC = threshold;
+    if (gcThreshold) |threshold| vm.heap.trackingAllocator.threshold = threshold;
     var compiler = try Compiler.init(std.testing.io, allocator, &scanner, &vm, null, FunctionType.SCRIPT);
     defer compiler.deinit();
 
@@ -109,7 +108,8 @@ test "global operand widths at constant indices 255 and 256" {
         try source.writer.writeAll("var target = nil; target = true; target;\x00");
 
         var scanner = Scanner.init(source.written().ptr);
-        var vm = try VM.init(std.testing.io, allocator);
+        var vm: VM = undefined;
+        try vm.init(std.testing.io, allocator);
         defer vm.deinit();
         var compiler = try Compiler.init(std.testing.io, allocator, &scanner, &vm, null, FunctionType.SCRIPT);
         defer compiler.deinit();
@@ -163,7 +163,8 @@ test "closure constant indices at and beyond the one-byte limit" {
         try source.append(std.testing.allocator, 0);
 
         var scanner = Scanner.init(source.items.ptr);
-        var vm = try VM.init(std.testing.io, arena.allocator());
+        var vm: VM = undefined;
+        try vm.init(std.testing.io, arena.allocator());
         defer vm.deinit();
         var compiler = try Compiler.init(std.testing.io, arena.allocator(), &scanner, &vm, null, FunctionType.SCRIPT);
         defer compiler.deinit();
@@ -259,7 +260,8 @@ test "018 illegal assignment target" {
     defer std.testing.allocator.free(source);
 
     var scanner = Scanner.init(source.ptr);
-    var vm = try VM.init(std.testing.io, std.testing.allocator);
+    var vm: VM = undefined;
+    try vm.init(std.testing.io, std.testing.allocator);
     defer vm.deinit();
     var compiler = try Compiler.init(std.testing.io, std.testing.allocator, &scanner, &vm, null, FunctionType.SCRIPT);
     defer compiler.deinit();
@@ -288,7 +290,8 @@ test "036 callable equality uses identity" {
     defer std.testing.allocator.free(source);
 
     var scanner = Scanner.init(source.ptr);
-    var vm = try VM.init(std.testing.io, std.testing.allocator);
+    var vm: VM = undefined;
+    try vm.init(std.testing.io, std.testing.allocator);
     defer vm.deinit();
     var compiler = try Compiler.init(std.testing.io, std.testing.allocator, &scanner, &vm, null, FunctionType.SCRIPT);
     defer compiler.deinit();
@@ -344,7 +347,8 @@ test "047 floor" {
     defer std.testing.allocator.free(source);
 
     var scanner = Scanner.init(source.ptr);
-    var vm = try VM.init(std.testing.io, std.testing.allocator);
+    var vm: VM = undefined;
+    try vm.init(std.testing.io, std.testing.allocator);
     defer vm.deinit();
     var compiler = try Compiler.init(std.testing.io, std.testing.allocator, &scanner, &vm, null, FunctionType.SCRIPT);
     defer compiler.deinit();
@@ -380,10 +384,11 @@ test "049 array methods" {
     defer std.testing.allocator.free(source);
 
     var scanner = Scanner.init(source.ptr);
-    var vm = try VM.init(std.testing.io, std.testing.allocator);
+    var vm: VM = undefined;
+    try vm.init(std.testing.io, std.testing.allocator);
     defer vm.deinit();
     // Collect on every allocation, so the array class and its natives must be rooted.
-    vm.heap.nextGC = 1;
+    vm.heap.trackingAllocator.threshold = 1;
     var compiler = try Compiler.init(std.testing.io, std.testing.allocator, &scanner, &vm, null, FunctionType.SCRIPT);
     defer compiler.deinit();
 
@@ -405,9 +410,10 @@ test "051 array join" {
     defer std.testing.allocator.free(source);
 
     var scanner = Scanner.init(source.ptr);
-    var vm = try VM.init(std.testing.io, std.testing.allocator);
+    var vm: VM = undefined;
+    try vm.init(std.testing.io, std.testing.allocator);
     defer vm.deinit();
-    vm.heap.nextGC = 1;
+    vm.heap.trackingAllocator.threshold = 1;
     var compiler = try Compiler.init(std.testing.io, std.testing.allocator, &scanner, &vm, null, FunctionType.SCRIPT);
     defer compiler.deinit();
 
@@ -425,7 +431,8 @@ test "054 keyword prefixed identifiers" {
     defer std.testing.allocator.free(source);
 
     var scanner = Scanner.init(source.ptr);
-    var vm = try VM.init(std.testing.io, std.testing.allocator);
+    var vm: VM = undefined;
+    try vm.init(std.testing.io, std.testing.allocator);
     defer vm.deinit();
     var compiler = try Compiler.init(std.testing.io, std.testing.allocator, &scanner, &vm, null, FunctionType.SCRIPT);
     defer compiler.deinit();
@@ -445,7 +452,8 @@ test "055 super methods" {
     defer std.testing.allocator.free(source);
 
     var scanner = Scanner.init(source.ptr);
-    var vm = try VM.init(std.testing.io, std.testing.allocator);
+    var vm: VM = undefined;
+    try vm.init(std.testing.io, std.testing.allocator);
     defer vm.deinit();
     var compiler = try Compiler.init(std.testing.io, std.testing.allocator, &scanner, &vm, null, FunctionType.SCRIPT);
     defer compiler.deinit();

@@ -25,14 +25,13 @@ const INITIAL_GC_THRESHOLD = 1024 * 1024;
 ///
 /// Each allocation embeds an Obj header for registration and destruction.
 pub const Heap = struct {
+    childAllocator: std.mem.Allocator, // We use this allocator to ensure we don't trigger garbage collection on grayStack allocations.
     trackingAllocator: *TrackingAllocator,
     allocator: std.mem.Allocator,
     objects: ?*Obj = null,
     strings: std.StringHashMap(*ObjStr),
     grayStack: std.ArrayList(*Obj),
-    nextGC: usize = INITIAL_GC_THRESHOLD,
     compiler: ?*Compiler = null,
-    garbageCollectionEnabled: bool = false,
 
     pub fn init(childAllocator: std.mem.Allocator) !Heap {
         // Allocator interfaces point at their implementation state. Keeping
@@ -40,9 +39,11 @@ pub const Heap = struct {
         // the interface stored by objects and collections.
         const trackingAllocator = try childAllocator.create(TrackingAllocator);
         trackingAllocator.* = TrackingAllocator.init(childAllocator);
+        trackingAllocator.threshold = INITIAL_GC_THRESHOLD;
         const allocator = trackingAllocator.allocator();
 
         return .{
+            .childAllocator = childAllocator,
             .trackingAllocator = trackingAllocator,
             .allocator = allocator,
             .strings = std.StringHashMap(*ObjStr).init(allocator),
@@ -50,17 +51,33 @@ pub const Heap = struct {
         };
     }
 
-    pub fn shouldCollectGarbage(self: *const Heap) bool {
-        return self.trackingAllocator.bytesAllocated > self.nextGC;
+    /// Let the tracking allocator run a collection before an allocation
+    /// crosses the threshold.
+    ///
+    /// The hook stores a pointer to this heap, so call this only once the
+    /// heap (and the VM that contains it) is at its final address. `Heap.init`
+    /// returns by value, so `VM.init` calls this after the heap is in place.
+    pub fn enableGarbageCollection(self: *Heap) void {
+        self.trackingAllocator.onThresholdReached = .{
+            .context = self,
+            .call = collectGarbageHook,
+        };
     }
 
-    pub fn checkAndCollect(self: *Heap) !void {
-        // TODO: Now we collect once the heap is already larger than nextGC.
-        // Instead we should collect when the upcoming allocation would surpass the max heap threshold.
-        if (self.garbageCollectionEnabled and self.shouldCollectGarbage()) {
-            const vm: *VM = @fieldParentPtr("heap", self);
-            try self.collectGarbage(vm);
-        }
+    fn collectGarbageHook(context: *anyopaque) void {
+        const self: *Heap = @ptrCast(@alignCast(context));
+        const vm: *VM = @fieldParentPtr("heap", self);
+        // The allocator interface can't return this error. Skipping the
+        // collection is safe: the allocation goes ahead and the heap grows.
+        self.collectGarbage(vm) catch {};
+    }
+
+    pub fn isGarbageCollectionEnabled(self: *const Heap) bool {
+        return self.trackingAllocator.onThresholdReached != null;
+    }
+
+    pub fn shouldCollectGarbage(self: *const Heap) bool {
+        return self.trackingAllocator.bytesAllocated > self.trackingAllocator.threshold;
     }
 
     /// Core garbage collection loop.
@@ -77,12 +94,12 @@ pub const Heap = struct {
         try self.traceReferences();
         self.removeWhiteInternedStrings();
         self.sweep();
-        self.nextGC = std.math.mul(usize, self.trackingAllocator.bytesAllocated, 2) catch std.math.maxInt(usize);
+        self.trackingAllocator.threshold = std.math.mul(usize, self.trackingAllocator.bytesAllocated, 2) catch std.math.maxInt(usize);
 
         if (comptime DEBUG_GC) {
             const bytesAfter = self.trackingAllocator.bytesAllocated;
             const bytesFreed = bytesBefore -| bytesAfter;
-            const bytesUntilNextGC = self.nextGC -| bytesAfter;
+            const bytesUntilNextGC = self.trackingAllocator.threshold -| bytesAfter;
             std.debug.print("-- gc end: freed {d} bytes, {d} bytes until next collection\n", .{ bytesFreed, bytesUntilNextGC });
         }
     }
@@ -234,7 +251,7 @@ pub const Heap = struct {
         }
 
         obj.mark();
-        try self.grayStack.append(self.allocator, obj);
+        try self.grayStack.append(self.childAllocator, obj);
     }
 
     /// Register an already allocated object with this heap.
@@ -244,8 +261,6 @@ pub const Heap = struct {
     }
 
     pub fn createArray(self: *Heap, len: usize) !*ObjArray {
-        try self.checkAndCollect();
-
         const array = try self.allocator.create(ObjArray);
         errdefer self.allocator.destroy(array);
         array.* = .{};
@@ -263,8 +278,6 @@ pub const Heap = struct {
 
     /// The name must remain alive for the lifetime of the class.
     pub fn createClass(self: *Heap, name: *ObjStr) !*ObjClass {
-        try self.checkAndCollect();
-
         const class = try self.allocator.create(ObjClass);
         errdefer self.allocator.destroy(class);
         const methods = HashMap.init(self.allocator);
@@ -283,8 +296,6 @@ pub const Heap = struct {
 
     /// The class must remain alive for the lifetime of the instance.
     pub fn createInstance(self: *Heap, class: *ObjClass) !*ObjInstance {
-        try self.checkAndCollect();
-
         const instance = try self.allocator.create(ObjInstance);
         instance.* = .{
             .class = class,
@@ -303,8 +314,6 @@ pub const Heap = struct {
     /// The receiver and the method must remain alive for the lifetime of the
     /// bound method.
     pub fn createBoundMethod(self: *Heap, receiver: Value, method: Value) !*ObjBoundMethod {
-        try self.checkAndCollect();
-
         const bound = try self.allocator.create(ObjBoundMethod);
         bound.* = .{ .receiver = receiver, .method = method };
 
@@ -319,8 +328,6 @@ pub const Heap = struct {
 
     /// The name must remain alive for the lifetime of the function.
     pub fn createFunction(self: *Heap, name: *ObjStr) !*ObjFunction {
-        try self.checkAndCollect();
-
         const function = try ObjFunction.create(self.allocator);
         errdefer function.destroy(self.allocator);
         function.name = name;
@@ -336,8 +343,6 @@ pub const Heap = struct {
     }
 
     pub fn createNative(self: *Heap, arity: u8, fun: value_mod.NativeFn) !*ObjNative {
-        try self.checkAndCollect();
-
         const native = try self.allocator.create(ObjNative);
         errdefer self.allocator.destroy(native);
         native.* = .{ .function = fun, .arity = arity };
@@ -352,8 +357,6 @@ pub const Heap = struct {
     }
 
     pub fn createClosure(self: *Heap, fun: *ObjFunction) !*ObjClosure {
-        try self.checkAndCollect();
-
         const closure = try self.allocator.create(ObjClosure);
         errdefer self.allocator.destroy(closure);
         closure.* = .{
@@ -372,8 +375,6 @@ pub const Heap = struct {
     }
 
     pub fn createUpvalue(self: *Heap, value: *Value) !*ObjUpvalue {
-        try self.checkAndCollect();
-
         const upvalue = try self.allocator.create(ObjUpvalue);
         errdefer self.allocator.destroy(upvalue);
         upvalue.* = .{ .location = value };
@@ -390,7 +391,6 @@ pub const Heap = struct {
     /// it is not already present.
     pub fn copyString(self: *Heap, chars: []const u8) !*ObjStr {
         if (self.strings.get(chars)) |interned| return interned;
-        try self.checkAndCollect();
 
         const owned_chars = try self.allocator.dupe(u8, chars);
         return self.takeString(owned_chars);
@@ -405,7 +405,6 @@ pub const Heap = struct {
             return interned;
         }
 
-        try self.checkAndCollect();
         const object = self.allocator.create(ObjStr) catch |err| {
             self.allocator.free(chars);
             return err;
@@ -428,7 +427,7 @@ pub const Heap = struct {
 
     pub fn deinit(self: *Heap) void {
         self.strings.deinit();
-        self.grayStack.deinit(self.allocator);
+        self.grayStack.deinit(self.childAllocator);
         var object = self.objects;
         while (object) |current| {
             const next = current.next;

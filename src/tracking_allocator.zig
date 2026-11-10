@@ -4,10 +4,21 @@ const Allocator = std.mem.Allocator;
 
 /// Wraps another allocator and tracks the number of currently allocated bytes.
 ///
+/// An optional hook is called before an allocation that would grow
+/// `bytesAllocated` past `threshold`. The garbage collector uses this to run
+/// a collection before the heap grows beyond its limit.
+///
 /// This allocator is not thread-safe.
 pub const TrackingAllocator = struct {
     childAllocator: Allocator,
     bytesAllocated: usize = 0,
+    threshold: usize = std.math.maxInt(usize),
+    onThresholdReached: ?Hook = null,
+
+    pub const Hook = struct {
+        context: *anyopaque,
+        call: *const fn (context: *anyopaque) void,
+    };
 
     pub fn init(childAllocator: Allocator) TrackingAllocator {
         return .{ .childAllocator = childAllocator };
@@ -27,6 +38,7 @@ pub const TrackingAllocator = struct {
 
     fn alloc(context: *anyopaque, len: usize, alignment: std.mem.Alignment, returnAddress: usize) ?[*]u8 {
         const self: *TrackingAllocator = @ptrCast(@alignCast(context));
+        self.beforeGrow(len);
         const memory = self.childAllocator.rawAlloc(len, alignment, returnAddress) orelse return null;
         self.bytesAllocated += len;
         return memory;
@@ -34,6 +46,7 @@ pub const TrackingAllocator = struct {
 
     fn resize(context: *anyopaque, memory: []u8, alignment: std.mem.Alignment, newLen: usize, returnAddress: usize) bool {
         const self: *TrackingAllocator = @ptrCast(@alignCast(context));
+        if (newLen > memory.len) self.beforeGrow(newLen - memory.len);
         if (!self.childAllocator.rawResize(memory, alignment, newLen, returnAddress)) return false;
 
         self.recordResize(memory.len, newLen);
@@ -42,6 +55,7 @@ pub const TrackingAllocator = struct {
 
     fn remap(context: *anyopaque, memory: []u8, alignment: std.mem.Alignment, newLen: usize, returnAddress: usize) ?[*]u8 {
         const self: *TrackingAllocator = @ptrCast(@alignCast(context));
+        if (newLen > memory.len) self.beforeGrow(newLen - memory.len);
         const newMemory = self.childAllocator.rawRemap(memory, alignment, newLen, returnAddress) orelse return null;
 
         self.recordResize(memory.len, newLen);
@@ -52,6 +66,18 @@ pub const TrackingAllocator = struct {
         const self: *TrackingAllocator = @ptrCast(@alignCast(context));
         self.childAllocator.rawFree(memory, alignment, returnAddress);
         self.bytesAllocated -= memory.len;
+    }
+
+    /// Call the hook if growing by `len` bytes would cross the threshold.
+    fn beforeGrow(self: *TrackingAllocator, len: usize) void {
+        const hook = self.onThresholdReached orelse return;
+        if (self.bytesAllocated +| len <= self.threshold) return;
+
+        // The hook may allocate itself (e.g. the GC's gray stack). Disable it
+        // while it runs so those allocations don't call it again.
+        self.onThresholdReached = null;
+        defer self.onThresholdReached = hook;
+        hook.call(hook.context);
     }
 
     fn recordResize(self: *TrackingAllocator, oldLen: usize, newLen: usize) void {
@@ -112,4 +138,38 @@ test "does not track failed allocations" {
 
     try std.testing.expectError(error.OutOfMemory, allocator.alloc(u8, 9));
     try std.testing.expectEqual(0, trackingAllocator.bytesAllocated);
+}
+
+test "calls the hook before an allocation crosses the threshold" {
+    const Counter = struct {
+        tracking: *TrackingAllocator,
+        calls: usize = 0,
+        bytesSeen: usize = 0,
+
+        fn call(context: *anyopaque) void {
+            const counter: *@This() = @ptrCast(@alignCast(context));
+            counter.calls += 1;
+            // Recorded before the child allocation happens.
+            counter.bytesSeen = counter.tracking.bytesAllocated;
+        }
+    };
+
+    var buffer: [64]u8 = undefined;
+    var fixedBufferAllocator = std.heap.FixedBufferAllocator.init(&buffer);
+    var trackingAllocator = TrackingAllocator.init(fixedBufferAllocator.allocator());
+    var counter: Counter = .{ .tracking = &trackingAllocator };
+    trackingAllocator.threshold = 16;
+    trackingAllocator.onThresholdReached = .{ .context = &counter, .call = Counter.call };
+    const allocator = trackingAllocator.allocator();
+
+    const first = try allocator.alloc(u8, 16);
+    try std.testing.expectEqual(0, counter.calls);
+
+    const second = try allocator.alloc(u8, 1);
+    try std.testing.expectEqual(1, counter.calls);
+    try std.testing.expectEqual(16, counter.bytesSeen);
+
+    allocator.free(second);
+    allocator.free(first);
+    try std.testing.expectEqual(1, counter.calls);
 }

@@ -21,8 +21,8 @@ const CompilerError = error{ ParseError, TooManyUpvalues };
 
 const Precedence = enum { NONE, ASSIGNMENT, TERNARY, OR, AND, EQUALITY, COMPARISON, TERM, FACTOR, UNARY, CALL, PRIMARY };
 
-const PrefixParseFn = *const fn (self: *Compiler, canAssign: bool) (ChunkErrors || std.mem.Allocator.Error)!void;
-const InfixParseFn = *const fn (self: *Compiler, canAssign: bool) (ChunkErrors || std.mem.Allocator.Error)!void;
+const PrefixParseFn = *const fn (self: *Compiler, canAssign: bool) (error{StackOverflow} || ChunkErrors || std.mem.Allocator.Error)!void;
+const InfixParseFn = *const fn (self: *Compiler, canAssign: bool) (error{StackOverflow} || ChunkErrors || std.mem.Allocator.Error)!void;
 
 const ParseRule = struct {
     prefix: ?PrefixParseFn,
@@ -330,11 +330,14 @@ pub const Compiler = struct {
         var inner = try Compiler.init(self.io, self.allocator, self.scanner, self.vm, self, fType);
         try inner._function();
         const functionObject = inner.endCompiler();
+        const functionValue = Value.from(functionObject);
+        try self.vm.pushRoot(functionValue);
+        defer self.vm.popRoot();
         // The upvalue descriptors live on the function object, not in the bytecode, so
         // OP_CLOSURE is a plain opcode + operand instruction. The heap's allocator owns
         // them, like the rest of the function, and `ObjFunction.destroy` frees them.
         functionObject.upvalues = try self.vm.heap.allocator.dupe(UpvalueDescriptor, inner.upvalues[0..functionObject.upvalueCount]);
-        try self.emitOpWithOperand(OpCode.OP_CLOSURE, try self.makeConstant(Value.from(functionObject)));
+        try self.emitOpWithOperand(OpCode.OP_CLOSURE, try self.makeConstant(functionValue));
     }
 
     fn _function(self: *Compiler) !void {
@@ -815,6 +818,8 @@ pub const Compiler = struct {
                 setOp = OpCode.OP_SET_UPVALUE;
             } else {
                 const internedName = try self.vm.heap.copyString(name);
+                try self.vm.pushRoot(Value.from(internedName));
+                defer self.vm.popRoot();
                 arg = self.currentChunk().findValue(internedName.chars) orelse try self.makeConstant(Value.from(internedName));
                 getOp = OpCode.OP_GET_GLOBAL;
                 setOp = OpCode.OP_SET_GLOBAL;
@@ -880,8 +885,10 @@ pub const Compiler = struct {
 
     fn string(self: *Compiler, _: bool) !void {
         const input = self.previous.lexeme[1 .. self.previous.lexeme.len - 1];
-        const object = try self.vm.heap.copyString(input);
-        try self.emitConstant(Value.from(object));
+        const object = Value.from(try self.vm.heap.copyString(input));
+        try self.vm.pushRoot(object);
+        defer self.vm.popRoot();
+        try self.emitConstant(object);
     }
 
     fn grouping(self: *Compiler, _: bool) !void {
@@ -1191,7 +1198,8 @@ fn nextPrecedence(precedence: Precedence) Precedence {
 
 fn expectScopeCleanup(count: usize, captured: ?usize, expected: []const u8) !void {
     var scanner = Scanner.init("".ptr);
-    var vm = try VM.init(std.testing.io, std.testing.allocator);
+    var vm: VM = undefined;
+    try vm.init(std.testing.io, std.testing.allocator);
     defer vm.deinit();
     var compiler = try Compiler.init(std.testing.io, std.testing.allocator, &scanner, &vm, null, FunctionType.SCRIPT);
     defer compiler.deinit();
@@ -1234,7 +1242,8 @@ test "emitOpWithOperand adds the minimal number of OP_EXTRA_ARG prefixes" {
 
     for (cases) |case| {
         var scanner = Scanner.init("".ptr);
-        var vm = try VM.init(std.testing.io, std.testing.allocator);
+        var vm: VM = undefined;
+        try vm.init(std.testing.io, std.testing.allocator);
         defer vm.deinit();
         var compiler = try Compiler.init(std.testing.io, std.testing.allocator, &scanner, &vm, null, FunctionType.SCRIPT);
         defer compiler.deinit();

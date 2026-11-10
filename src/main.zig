@@ -23,7 +23,8 @@ pub fn main(init: std.process.Init) !void {
 
     const args = try init.minimal.args.toSlice(allocator);
 
-    var engine = try Engine.init(init.io, allocator);
+    var engine: Engine = undefined;
+    try engine.init(init.io, allocator);
     defer engine.deinit();
 
     if (args.len > 1) {

@@ -151,8 +151,10 @@ pub const VM = struct {
     /// because the reader may buffer more than one line at a time.
     stdinReader: ?std.Io.File.Reader = null,
 
-    pub fn init(io: std.Io, allocator: std.mem.Allocator) !VM {
-        var vm = VM{
+    /// Initialise the VM in place. The heap's GC hook stores a pointer into
+    /// the VM, so it must not move afterwards.
+    pub fn init(vm: *VM, io: std.Io, allocator: std.mem.Allocator) !void {
+        vm.* = .{
             .io = io,
             .allocator = allocator,
             .stack = .{},
@@ -172,7 +174,7 @@ pub const VM = struct {
         try vm.defineNativeMethod(vm.arrayClass, "get", 1, arrayGetNative);
         try vm.defineNativeMethod(vm.arrayClass, "set", 2, arraySetNative);
         try vm.defineNativeMethod(vm.arrayClass, "join", 1, arrayJoinNative);
-        vm.heap.garbageCollectionEnabled = true;
+        vm.heap.enableGarbageCollection();
 
         try vm.defineNative("clock", 0, clockNative);
         try vm.defineNative("random", 0, randomNative);
@@ -182,8 +184,6 @@ pub const VM = struct {
         try vm.defineNative("readLine", 0, readLineNative);
         try vm.defineNative("writeFile", 2, writeFileNative);
         try vm.defineNative("appendFile", 2, appendFileNative);
-
-        return vm;
     }
 
     pub fn deinit(self: *VM) void {
@@ -690,9 +690,6 @@ pub const VM = struct {
         const b = self.peekStack(0).as(ObjStr).chars;
         const a = self.peekStack(1).as(ObjStr).chars;
 
-        // Perform a garbage collection run (if needed) before we allocate the new string buffer.
-        try self.heap.checkAndCollect();
-
         const chars = try std.mem.concat(self.heap.allocator, u8, &[_][]const u8{ a, b });
         const v: Value = Value.from(try self.heap.takeString(chars));
 
@@ -705,8 +702,6 @@ pub const VM = struct {
     inline fn concatArrays(self: *VM) !void {
         const b = self.peekStack(0).as(ObjArray);
         const a = self.peekStack(1).as(ObjArray);
-
-        try self.heap.checkAndCollect();
 
         const combined = try self.heap.createArray(a.values.items.len + b.values.items.len);
 
@@ -1121,7 +1116,8 @@ const ExecutionTrace = struct {
 };
 
 test "object equality compares strings by content and callables by identity" {
-    var vm = try VM.init(std.testing.io, std.testing.allocator);
+    var vm: VM = undefined;
+    try vm.init(std.testing.io, std.testing.allocator);
     defer vm.deinit();
 
     var a = value.ObjStr{ .chars = "same", .hash = 0 };
@@ -1148,7 +1144,8 @@ test "object equality compares strings by content and callables by identity" {
 }
 
 test "readLine returns lines without line endings and nil at end of input" {
-    var vm = try VM.init(std.testing.io, std.testing.allocator);
+    var vm: VM = undefined;
+    try vm.init(std.testing.io, std.testing.allocator);
     defer vm.deinit();
 
     var reader: std.Io.Reader = .fixed("first\nsecond\r\nlast");
@@ -1159,7 +1156,8 @@ test "readLine returns lines without line endings and nil at end of input" {
 }
 
 test "writeFile native requires a path and contents string" {
-    var vm = try VM.init(std.testing.io, std.testing.allocator);
+    var vm: VM = undefined;
+    try vm.init(std.testing.io, std.testing.allocator);
     defer vm.deinit();
 
     const contents = try vm.heap.copyString("contents");
@@ -1173,7 +1171,8 @@ test "writeFile native requires a path and contents string" {
 }
 
 test "stack overflow is a runtime fault and resets the VM" {
-    var vm = try VM.init(std.testing.io, std.testing.allocator);
+    var vm: VM = undefined;
+    try vm.init(std.testing.io, std.testing.allocator);
     defer vm.deinit();
 
     const name = try vm.heap.copyString("overflow");
@@ -1195,7 +1194,8 @@ test "execution trace labels instruction and pre-execution stack" {
 
     try function.chunk.writeChunk(@intFromEnum(OpCode.OP_ADD), 4);
 
-    var vm = try VM.init(std.testing.io, std.testing.allocator);
+    var vm: VM = undefined;
+    try vm.init(std.testing.io, std.testing.allocator);
     defer vm.deinit();
     const closure = try vm.heap.createClosure(function);
     vm.appendFrame(function);
@@ -1218,7 +1218,8 @@ test "execution trace shows branch destination and decision" {
     try function.chunk.writeChunk(0, 3);
     try function.chunk.writeChunk(2, 3);
 
-    var vm = try VM.init(std.testing.io, std.testing.allocator);
+    var vm: VM = undefined;
+    try vm.init(std.testing.io, std.testing.allocator);
     defer vm.deinit();
     const closure = try vm.heap.createClosure(function);
     vm.appendFrame(function);
