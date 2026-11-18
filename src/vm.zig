@@ -506,10 +506,15 @@ pub const VM = struct {
                 OpCode.OP_SET_PROPERTY => {
                     const name = self.readConstant(&ip, &extra, constants);
 
-                    const v = self.stack.pop().?;
-                    const instance = self.stack.pop().?;
+                    // Peek, don't pop: growing the field map can trigger a
+                    // collection, so both operands must stay rooted on the
+                    // stack until the put is done.
+                    const v = self.peekStack(0);
+                    const instance = self.peekStack(1);
                     if (instance.is(ObjInstance)) {
                         try instance.as(ObjInstance).fields.put(name.as(ObjStr), v);
+                        _ = self.stack.pop();
+                        _ = self.stack.pop();
                         try self.stack.append(v);
                     } else {
                         return .not_assignable;

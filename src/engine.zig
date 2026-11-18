@@ -467,3 +467,26 @@ test "055 super methods" {
         try std.testing.expectEqual(true, result.asBool());
     }
 }
+
+test "060 set property survives garbage collection" {
+    const source = try loadTestFile(std.testing.allocator, "060_set_property_gc.lox");
+    defer std.testing.allocator.free(source);
+
+    var scanner = Scanner.init(source.ptr);
+    var vm: VM = undefined;
+    try vm.init(std.testing.io, std.testing.allocator);
+    defer vm.deinit();
+    var compiler = try Compiler.init(std.testing.io, std.testing.allocator, &scanner, &vm, null, FunctionType.SCRIPT);
+    defer compiler.deinit();
+
+    const function = try compiler.compile();
+    try std.testing.expectEqual(null, try vm.startScript(function));
+    vm.heap.stressGc = true;
+    vm.heap.trackingAllocator.threshold = 0;
+    try std.testing.expectEqual(InterpretResult.OK, try vm.run());
+
+    for ([_][]const u8{ "nameSurvived", "tempReceiverOk" }) |name| {
+        const result = vm.getGlobal(name) orelse return error.MissingGlobal;
+        try std.testing.expectEqual(true, result.asBool());
+    }
+}
