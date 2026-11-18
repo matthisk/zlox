@@ -1,0 +1,3 @@
+Create a new branch and fix this issue. Once done push your changes.
+
+Property assignment frees its operands mid-insert (src/vm.zig:509). OP_SET_PROPERTY pops the value and the receiver, then calls fields.put. If the hash map grows, that allocation can trigger a collection while neither value is on the stack. Confirmed: f.name = "hel" + "lo"; print f.name; printed garbage bytes, and Foo().x = 1; freed the instance while its field map was being grown, which trips the map's safety lock in Debug and corrupts the heap in release. Fix: peek instead of pop, and only pop after the put.
