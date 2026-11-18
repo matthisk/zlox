@@ -1,0 +1,14 @@
+// Run with a tiny GC threshold: growing an instance's field map allocates,
+// which can trigger a collection in the middle of OP_SET_PROPERTY.
+class Foo {}
+
+// The assigned value is a freshly concatenated string that only lives on the stack.
+var f = Foo();
+f.name = "hel" + "lo";
+// Compare against another concatenation: a "hello" literal would be an interned
+// constant, keeping the string alive and hiding the bug.
+var nameSurvived = f.name == "hel" + "lo";
+
+// The receiver is a temporary instance that only lives on the stack.
+Foo().x = 1;
+var tempReceiverOk = true;

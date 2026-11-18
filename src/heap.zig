@@ -48,6 +48,9 @@ pub const Heap = struct {
     grayStack: std.ArrayList(*Obj),
     compiler: ?*Compiler = null,
     gcStats: GcStats = .{},
+    /// Collect before every allocation. Tests use this to surface objects
+    /// that aren't rooted while the VM allocates.
+    stressGc: bool = false,
 
     pub fn init(childAllocator: std.mem.Allocator) !Heap {
         // Allocator interfaces point at their implementation state. Keeping
@@ -106,7 +109,10 @@ pub const Heap = struct {
         try self.traceReferences();
         self.removeWhiteInternedStrings();
         self.sweep();
-        self.trackingAllocator.threshold = @max(std.math.mul(usize, self.trackingAllocator.bytesAllocated, 2) catch std.math.maxInt(usize), INITIAL_GC_THRESHOLD);
+        self.trackingAllocator.threshold = if (self.stressGc)
+            0
+        else
+            @max(std.math.mul(usize, self.trackingAllocator.bytesAllocated, 2) catch std.math.maxInt(usize), INITIAL_GC_THRESHOLD);
 
         if (comptime DEBUG_GC) {
             self.printGcReport(bytesBefore);
